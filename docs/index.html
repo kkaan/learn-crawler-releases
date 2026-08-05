@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>learn_upload — LEARN data transfer pipeline</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="brand">
+      <img src="assets/gc-logo-green.svg" alt="GenesisCare" class="brand-logo" />
+      <div class="eyebrow">Physics &middot; LEARN</div>
+    </div>
+
+    <nav class="nav">
+      <div class="nav-label">Release</div>
+      <a class="nav-link" data-doc="home" href="#">Overview and download</a>
+
+      <div class="nav-divider"></div>
+      <div class="nav-label">Documentation</div>
+      <a class="nav-link" data-doc="GUI_Walkthrough.md" href="#doc=GUI_Walkthrough.md">GUI walkthrough</a>
+      <a class="nav-link" data-doc="GC_Elekta_Patient_Upload_Process.md" href="#doc=GC_Elekta_Patient_Upload_Process.md">GC Elekta patient upload process (SOP)</a>
+      <a class="nav-link" data-doc="LEARN_Upload_Automation_Plan.md" href="#doc=LEARN_Upload_Automation_Plan.md">LEARN upload automation plan</a>
+      <a class="nav-link" data-doc="Elekta_XVI_Reconstruction_Directory_Analysis.md" href="#doc=Elekta_XVI_Reconstruction_Directory_Analysis.md">XVI reconstruction directory analysis</a>
+      <a class="nav-link" data-doc="elekta_rps_format_documentation.md" href="#doc=elekta_rps_format_documentation.md">Elekta RPS format documentation</a>
+      <a class="nav-link" data-doc="elekta_xvi_sro_experimental_validation.md" href="#doc=elekta_xvi_sro_experimental_validation.md">SRO experimental validation notes</a>
+    </nav>
+
+    <div class="source-box">
+      <div class="nav-label">Source</div>
+      <a href="https://github.com/kkaan/learn-crawler-releases">github.com/kkaan/learn-crawler-releases</a>
+      <div class="source-author">Author: Kaan</div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <section id="home-page" class="page">
+      <header class="hero">
+        <div class="eyebrow">LEARN data transfer pipeline</div>
+        <h1 class="display">learn_upload</h1>
+        <p class="lede">Desktop wizard that transfers Elekta XVI CBCT patient data from GenesisCare exports to the USYD RDS/research/PRJ-LEARN structure. Covers folder sorting, DICOM anonymisation, PII verification, and CBCT shift reporting. Replaces the manual anonymisation and sorting workflow.</p>
+        <div class="tags">
+          <span class="tag">Windows x64</span>
+          <span class="tag tag-pass">No Python required</span>
+        </div>
+      </header>
+
+      <div class="download-card">
+        <div class="download-copy">
+          <div class="download-title">learn_upload.exe</div>
+          <div class="download-desc">Single-file executable, published on the repository releases page. Download and double-click; nothing to install.</div>
+          <div class="download-meta">Built by GitHub Actions on windows-latest &middot; Python 3.12 &middot; PyInstaller &middot; pydicom, PyQt6, numpy bundled</div>
+        </div>
+        <a class="btn-primary" href="https://github.com/kkaan/learn-crawler-releases/releases/latest">Download latest release</a>
+      </div>
+
+      <div class="notice-card">
+        <div class="notice-eyebrow">Before you run it</div>
+        <div class="notice-title">Work from a local drive</div>
+        <p>XVI exports contain thousands of small .his projection files. Reading them over a network share is much slower than working from local disk.</p>
+        <ol>
+          <li>Copy the patient_XXXXXXXX/ folder from the network to a local drive.</li>
+          <li>Run learn_upload.exe.</li>
+          <li>Point the source path at your local copy.</li>
+          <li>Set the output path to another local directory, e.g. E:\LEARN_OUTPUT.</li>
+          <li>When processing finishes, copy the output to the RDS research drive.</li>
+        </ol>
+      </div>
+
+      <section class="block">
+        <h2>Wizard steps</h2>
+        <div class="card-grid">
+          <div class="card"><div class="card-label">STEP 1</div><div class="card-title">Configuration</div><div class="card-desc">Paths, anonymised ID (PATxx), site name, PII search strings, dry-run option.</div></div>
+          <div class="card"><div class="card-label">STEP 2</div><div class="card-title">Data preview</div><div class="card-desc">Discovers XVI sessions, shows scan datetime, treatment ID, kV/mA, RPS presence, and fraction assignment.</div></div>
+          <div class="card"><div class="card-label">STEP 3</div><div class="card-title">Folder sort</div><div class="card-desc">Copies files into the LEARN directory structure by fraction and file type.</div></div>
+          <div class="card"><div class="card-label">STEP 4</div><div class="card-title">Anonymise</div><div class="card-desc">DICOM, XML, and INI anonymisation with per-file progress. Replaces the MIM workflow.</div></div>
+          <div class="card"><div class="card-label">STEP 5</div><div class="card-title">PII verification</div><div class="card-desc">Scans output for residual patient data. PASS or FAIL, with a findings table (file, location, matched string).</div></div>
+          <div class="card"><div class="card-label">STEP 6</div><div class="card-title">CBCT shift report</div><div class="card-desc">Writes cbct_shift_report.md to Patient Files/PATxx/ with per-fraction shifts in patient coordinates.</div></div>
+        </div>
+        <p class="hint">Step-by-step screenshots: <a href="#doc=GUI_Walkthrough.md">GUI walkthrough</a>.</p>
+      </section>
+
+      <section class="block">
+        <h2>Inputs the tool expects</h2>
+        <div class="card-grid card-grid-wide">
+          <div class="card"><div class="card-label">Required</div><div class="card-title">XVI patient export</div><div class="card-desc">patient_XXXXXXXX/ containing the images subdirectory (IMAGES/ or XVI Export/, configurable). One img_&lt;UID&gt;/ per acquisition session with _Frames.xml, .his projections, and Reconstruction/ holding .INI, .SCAN, .SCAN.MACHINEORIENTATION, and .RPS.dcm.</div></div>
+          <div class="card"><div class="card-label">Optional</div><div class="card-title">TPS export</div><div class="card-desc">Whole tree is scanned and files are classified by DICOM Modality, not folder name: CT to CT/, RTPLAN to Plan/, RTSTRUCT to Structure Set/, RTDOSE to Dose/. Other modalities (e.g. RTIMAGE) are ignored. Missing categories are non-blocking warnings.</div></div>
+          <div class="card"><div class="card-label">Optional</div><div class="card-title">Trajectory logs and centroid file</div><div class="card-desc">FX01/, FX02/ ... subdirectories with MarkerLocations*.txt. Centroid file is a single .txt, e.g. Centroid_12345678_BeamID_1.1_1.2.txt; the MRN in the filename is replaced with the anon ID on copy.</div></div>
+        </div>
+      </section>
+
+      <section class="block">
+        <h2>Fraction assignment</h2>
+        <p>FXnn labels are ground truth, not derived from dates.</p>
+        <div class="card-grid card-grid-wide">
+          <div class="card"><div class="card-title">PRIME patients</div><div class="card-desc">Trajectory FXnn/ folder names set by the RT or physicist are the fraction number. Every XVI session a trajectory log references is assigned by img_&lt;UID&gt;; dated referenced sessions anchor the fraction date, and only unreferenced setup CBCTs attach by that date. A same-day KIM restart (FX13 + FX13-1) is one fraction; its setup CBCTs go to base FX13.</div></div>
+          <div class="card"><div class="card-title">Non-PRIME patients</div><div class="card-desc">No trajectory folders: Data Preview lists each distinct CBCT date and you enter the fraction number for each. Look these up in the Mosaiq patient schedule or image browser. One fraction = one day.</div></div>
+        </div>
+        <p class="hint">Sessions that cannot be placed unambiguously are flagged in Data Preview rather than silently mis-sorted.</p>
+      </section>
+
+      <section class="block">
+        <h2>Running from source</h2>
+        <p>Requires Python 3.10+ and uv. uv creates a project-local .venv/, installs the learn_upload package with its dependencies, and pins versions in uv.lock. uv run syncs the environment before executing, so there is no venv to activate.</p>
+        <pre>git clone https://github.com/kkaan/learn-crawler-releases.git
+cd learn-crawler-releases
+
+uv sync --extra gui --extra dev        # environment + GUI + dev tooling
+uv run python -m learn_upload          # launch the GUI
+uv run python -m pytest tests/ -v      # run tests
+uv run ruff check learn_upload/ tests/ scripts/</pre>
+        <p class="hint">Plain pip alternative: python -m venv .venv &amp;&amp; .venv\Scripts\activate, then pip install -e ".[gui,dev]" and python -m learn_upload. Always use python -m pip so packages land in the interpreter that runs the code.</p>
+      </section>
+
+      <section class="block">
+        <h2>Repository layout</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Directory</th><th>Contents</th></tr></thead>
+            <tbody>
+              <tr><td class="mono">learn_upload/</td><td>Core package: config, utils, anonymise_dicom, folder_sort, fraction_assignment, verify_pii, source_layout, gui_qt (PyQt6).</td></tr>
+              <tr><td class="mono">cbct-shifts/</td><td>compare_rps_mosaiq.py (RPS vs Mosaiq 6-DOF side-by-side), report_patient_details.py.</td></tr>
+              <tr><td class="mono">scripts/</td><td>extract_elekta_rps_matrices.py, read_dicom_tags.py, elektafdt_crawler.py, anonymise_dicom_file.py.</td></tr>
+              <tr><td class="mono">examples/</td><td>run_patient_example.py — end-to-end pipeline using DicomAnonymiser, LearnFolderMapper, verify_no_pii.</td></tr>
+              <tr><td class="mono">tests/</td><td>pytest suite for learn_upload.</td></tr>
+              <tr><td class="mono">docs/</td><td>This site: landing page plus the documentation listed in the sidebar.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="block">
+        <h2>Documentation</h2>
+        <div class="card-grid card-grid-wide">
+          <a class="card card-link" href="#doc=GUI_Walkthrough.md"><div class="card-title">GUI walkthrough</div><div class="card-desc">All six wizard steps, field by field, with screenshots.</div></a>
+          <a class="card card-link" href="#doc=GC_Elekta_Patient_Upload_Process.md"><div class="card-title">GC Elekta patient upload process</div><div class="card-desc">SOP for transfer to PRJ-LEARN, target-in-projections check, Mosaiq shift cross-reference.</div></a>
+          <a class="card card-link" href="#doc=LEARN_Upload_Automation_Plan.md"><div class="card-title">LEARN upload automation plan</div><div class="card-desc">Full automation plan for the pipeline.</div></a>
+          <a class="card card-link" href="#doc=Elekta_XVI_Reconstruction_Directory_Analysis.md"><div class="card-title">XVI reconstruction directory analysis</div><div class="card-desc">Directory and file breakdown of an XVI export.</div></a>
+          <a class="card card-link" href="#doc=elekta_rps_format_documentation.md"><div class="card-title">Elekta RPS format documentation</div><div class="card-desc">RPS DICOM file format and coordinate mapping.</div></a>
+          <a class="card card-link" href="#doc=elekta_xvi_sro_experimental_validation.md"><div class="card-title">SRO experimental validation notes</div><div class="card-desc">Phantom validation of registration files and orientation. Working notes.</div></a>
+        </div>
+      </section>
+
+      <p class="footnote">Known limitation: if a TPS export contains more than one plan, structure set, or dose file, all matches are currently imported; there is no disambiguation step in the GUI yet.</p>
+    </section>
+
+    <section id="doc-page" class="page" hidden>
+      <div id="doc-content"></div>
+    </section>
+  </main>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

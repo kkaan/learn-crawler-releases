@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "learn-upload"
+version = "1.1.1"
+description = "Automation tools for the LEARN data transfer pipeline"
+requires-python = ">=3.10"
+dependencies = [
+    "pydicom>=3.0.1",
+    "defusedxml>=0.7",
+]
+
+[project.scripts]
+learn-upload = "learn_upload.__main__:main"
+
+[tool.setuptools]
+packages = ["learn_upload"]
+
+[project.optional-dependencies]
+gui = ["PyQt6", "numpy"]
+dev = [
+    "pytest>=7.0",
+    "ruff>=0.4",
+]
+build = ["pyinstaller"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "UP",   # pyupgrade
+]
+ignore = [
+    "E501",  # line too long
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E501"]
