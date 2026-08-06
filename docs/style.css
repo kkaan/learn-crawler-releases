@@ -85,14 +85,11 @@ a:hover { color: var(--gc-green); }
 
 .main { min-width: 0; }
 .page { display: flex; flex-direction: column; gap: 18px; }
+.page[hidden] { display: none; }
 
 .hero { display: flex; flex-direction: column; gap: 10px; }
 .display { font-size: clamp(1.8rem, 4vw, 3.2rem); line-height: 0.95; font-weight: 700; margin: 0; color: var(--gc-ink-strong); }
 .lede { font-size: 0.9rem; color: var(--gc-ink); margin: 0; max-width: 74ch; line-height: 1.55; }
-
-.tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
-.tag { border: 1px solid var(--gc-line); border-radius: 999px; background: var(--gc-surface); color: var(--gc-ink); font-size: 0.76rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.02em; padding: 5px 10px; }
-.tag-pass { border-color: var(--gc-green-line); background: var(--gc-green-soft); color: var(--gc-green-deep); }
 
 .download-card { border: 1px solid var(--gc-line); border-radius: 8px; background: var(--gc-surface); padding: 16px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: center; }
 .download-copy { display: flex; flex-direction: column; gap: 6px; }
