@@ -5,6 +5,7 @@ Paths, constants, DICOM tag lists, and logging setup used across all modules.
 """
 
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -16,6 +17,76 @@ ANON_ID_PREFIX = "PAT"
 def make_anon_id(n: int) -> str:
     """Format a sequential anonymised patient ID, e.g. make_anon_id(1) -> 'PAT01'."""
     return f"{ANON_ID_PREFIX}{n:02d}"
+
+
+# ---------------------------------------------------------------------------
+# Patient MRN verification
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class MrnCheck:
+    """Outcome of comparing the operator's MRN against the export's own."""
+
+    status: str  # "match" | "mismatch" | "not_found" | "conflicting_export"
+    entered: str
+    export_ids: list[str]
+
+    @property
+    def export_id(self) -> str | None:
+        """The export's MRN, or *None* when there isn't exactly one."""
+        return self.export_ids[0] if len(self.export_ids) == 1 else None
+
+
+def check_patient_mrn(entered: str, export_ids: dict[str, list[str]]) -> MrnCheck:
+    """Compare the MRN the operator entered against the IDs found in the export.
+
+    *export_ids* comes from ``source_layout.detect_export_patient_ids``.
+    Comparison ignores surrounding whitespace and case, so a formatting
+    difference is not reported as a mismatch.
+
+    Pure decision logic: the GUI renders the result and offers the choice.
+    """
+    entered_clean = entered.strip()
+    ids = list(export_ids)
+
+    if not ids:
+        return MrnCheck("not_found", entered_clean, [])
+    if len(ids) > 1:
+        return MrnCheck("conflicting_export", entered_clean, ids)
+    if ids[0].strip().casefold() == entered_clean.casefold():
+        return MrnCheck("match", entered_clean, ids)
+    return MrnCheck("mismatch", entered_clean, ids)
+
+
+# ---------------------------------------------------------------------------
+# Wizard configuration validation
+# ---------------------------------------------------------------------------
+def validate_config(cfg: dict) -> str | None:
+    """Validate a wizard configuration dict.
+
+    Returns the first error message, or *None* when the config is usable.
+    Kept free of Qt so it can be tested without a display; the GUI's
+    ``ConfigPage.validate()`` delegates here.
+
+    The REDCap ID is mandatory because it is written to line 1 of the
+    centroid file during anonymisation.  No format is enforced -- REDCap
+    project IDs vary between studies.
+    """
+    if not cfg.get("anon_id"):
+        return "Anonymised ID is required."
+    anon_id = cfg["anon_id"]
+    if not anon_id.startswith(ANON_ID_PREFIX) or not anon_id[len(ANON_ID_PREFIX):].isdigit():
+        return "Anon ID must match PATxx format (e.g. PAT01)."
+    if not cfg.get("redcap_id"):
+        return "REDCap ID is required."
+    if not cfg.get("patient_mrn"):
+        return "Patient MRN is required."
+    if not cfg.get("site_name"):
+        return "Site Name is required."
+    if not cfg.get("source_path"):
+        return "Source Path is required."
+    if not cfg.get("output_path"):
+        return "Output Path is required."
+    return None
 
 
 # ---------------------------------------------------------------------------

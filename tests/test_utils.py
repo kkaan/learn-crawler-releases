@@ -304,3 +304,25 @@ class TestExtractPlannedFractions:
         bogus = tmp_path / "not_a_dicom.dcm"
         bogus.write_bytes(b"this is not DICOM")
         assert extract_planned_fractions(bogus) is None
+
+
+# ---------------------------------------------------------------------------
+# parse_frames_xml — patient ID
+# ---------------------------------------------------------------------------
+
+class TestParseFramesXmlPatientId:
+    def test_extracts_patient_id(self, tmp_path):
+        xml_file = tmp_path / "_Frames.xml"
+        xml_file.write_text(
+            "<FrameData><Patient><ID>258413</ID>"
+            "<LastName>MUNDT</LastName></Patient></FrameData>",
+            encoding="utf-8",
+        )
+
+        assert parse_frames_xml(xml_file)["patient_id"] == "258413"
+
+    def test_patient_id_is_none_when_absent(self, tmp_path):
+        xml_file = tmp_path / "_Frames.xml"
+        xml_file.write_text(SAMPLE_FRAMES_XML, encoding="utf-8")
+
+        assert parse_frames_xml(xml_file)["patient_id"] is None

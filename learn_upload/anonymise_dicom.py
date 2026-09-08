@@ -382,11 +382,40 @@ def anonymise_ini_file(ini_path: Path, anon_id: str) -> None:
     logger.info("Anonymised INI %s", ini_path)
 
 
-def anonymise_centroid_file(file_path: Path, anon_id: str) -> Path:
+def anonymise_settings_file(file_path: Path, anon_id: str) -> None:
+    """Anonymise a KIM ``settings.txt`` in-place.
+
+    Occasionally exported alongside the trajectory logs, it carries
+    ``patient_name = LAST,First`` and ``patient_mrn = <MRN>``.  The name is
+    cleared and the MRN replaced; acquisition settings on the other lines
+    (``patient_markercoordinates2D``, ``FOV``, ...) are untouched.
+    """
+    file_path = Path(file_path)
+    text = file_path.read_text(encoding="utf-8", errors="replace")
+
+    text = re.sub(r"(?mi)^(patient_name\s*=).*$", r"\g<1> ", text)
+    text = re.sub(r"(?mi)^(patient_mrn\s*=).*$", rf"\g<1> {anon_id}", text)
+
+    file_path.write_text(text, encoding="utf-8")
+    logger.info("Anonymised settings %s", file_path)
+
+
+def anonymise_centroid_file(
+    file_path: Path,
+    anon_id: str,
+    site_name: str = "",
+    redcap_id: str = "",
+) -> Path:
     """Anonymise a centroid file in-place.
 
-    Lines 1 and 2 contain MRN and patient name; both are replaced with
-    *anon_id*.  The MRN portion of the filename is also replaced.
+    Lines 1 and 2 of a raw centroid file hold the MRN and the patient name
+    (``SMITH,John``).  Line 1 becomes the REDCap ID and line 2 becomes
+    ``"{anon_id}, {site_name}"``.  The MRN portion of the filename is also
+    replaced with *anon_id*.
+
+    *redcap_id* falls back to *anon_id* when empty, so a direct call (a
+    one-off resend, say) can never leave the MRN line blank.  The GUI
+    requires the REDCap ID up front.
 
     Returns the (possibly renamed) output path.
     """
@@ -398,9 +427,9 @@ def anonymise_centroid_file(file_path: Path, anon_id: str) -> Path:
     original_id = lines[0].strip() if lines else ""
 
     if len(lines) >= 1:
-        lines[0] = anon_id + "\n"
+        lines[0] = (redcap_id or anon_id) + "\n"
     if len(lines) >= 2:
-        lines[1] = anon_id + "\n"
+        lines[1] = (f"{anon_id}, {site_name}" if site_name else anon_id) + "\n"
 
     file_path.write_text("".join(lines), encoding="utf-8")
 
@@ -416,17 +445,32 @@ def anonymise_centroid_file(file_path: Path, anon_id: str) -> Path:
     return file_path
 
 
-def anonymise_trajectory_log(file_path: Path, original_id: str, anon_id: str) -> None:
+# The patient folder inside an embedded source path, e.g. the Filename column
+# of MarkerLocations_CouchShift_*.txt:
+#     X:\patient_258413\IMAGES\img_<UID>\00001.<UID>.his
+#
+# Anchored deliberately.  The trailing separator is what distinguishes a path
+# segment from a settings.txt key (``patient_name = MUNDT,John``,
+# ``patient_mrn = 258413``), and the character class excludes space/=/comma so
+# a key can never be swallowed.  Matching the MRN as a bare string would be
+# wrong: it also occurs inside legitimate coordinates such as
+# -2.25841393788174.
+_PATIENT_PATH_SEGMENT_RE = re.compile(r"(?i)(patient_)[^\\/\s=,]+(?=[\\/])")
+
+
+def anonymise_trajectory_log(file_path: Path, anon_id: str) -> None:
     """Anonymise a trajectory log file in-place.
 
-    Replaces ``patient_{original_id}`` with ``patient_{anon_id}`` in
-    the file text (used for MarkerLocations*.txt files).
+    Rewrites the ``patient_<MRN>`` folder of any source path embedded in the
+    file to ``patient_<anon_id>`` (used for MarkerLocations*.txt files).
+
+    The MRN is read from the path itself rather than supplied, so this works
+    regardless of what the operator named the Source Path folder.
     """
     file_path = Path(file_path)
     text = file_path.read_text(encoding="utf-8", errors="ignore")
 
-    if original_id:
-        text = text.replace(f"patient_{original_id}", f"patient_{anon_id}")
+    text = _PATIENT_PATH_SEGMENT_RE.sub(rf"\g<1>{anon_id}", text)
 
     file_path.write_text(text, encoding="utf-8")
     logger.info("Anonymised trajectory log %s", file_path)
@@ -439,6 +483,7 @@ def anonymise_output_folder(
     patient_dir: Path,
     tps_path: Path = None,
     progress_callback=None,
+    redcap_id: str = "",
 ) -> dict:
     """Scan an entire output folder and anonymise all files in-place.
 
@@ -465,21 +510,15 @@ def anonymise_output_folder(
     -------
     dict
         Summary: ``{"dcm": N, "xml": M, "ini": P, "centroid": Q,
-        "trajectory": R, "tps_imported": S, "errors": E}``.
+        "trajectory": R, "settings": T, "tps_imported": S, "errors": E}``.
     """
     output_dir = Path(output_dir)
     patient_dir = Path(patient_dir)
     site_root = output_dir / Path(site_name).name
 
-    # Detect original patient ID from source directory name
-    patient_dir_name = patient_dir.name
-    original_id = ""
-    if patient_dir_name.lower().startswith("patient_"):
-        original_id = patient_dir_name[len("patient_"):]
-
     counts = {
         "dcm": 0, "xml": 0, "ini": 0, "centroid": 0,
-        "trajectory": 0, "tps_imported": 0, "errors": 0,
+        "trajectory": 0, "settings": 0, "tps_imported": 0, "errors": 0,
     }
 
     # --- Phase 1: Collect all files to process ---
@@ -530,13 +569,20 @@ def anonymise_output_folder(
                 dcm.save_as(file_path)
                 counts["dcm"] += 1
 
+            elif name_lower == "settings.txt":
+                # KIM settings occasionally exported next to the trajectory logs
+                anonymise_settings_file(file_path, anon_id)
+                counts["settings"] += 1
+
             elif name_lower.startswith("markerlocations") and name_lower.endswith(".txt"):
-                anonymise_trajectory_log(file_path, original_id, anon_id)
+                anonymise_trajectory_log(file_path, anon_id)
                 counts["trajectory"] += 1
 
             elif "patient files" in str(file_path.parent).lower() and name_lower.endswith(".txt"):
                 # Centroid files live in Patient Files/{anon_id}/
-                anonymise_centroid_file(file_path, anon_id)
+                anonymise_centroid_file(
+                    file_path, anon_id, site_name=site_name, redcap_id=redcap_id
+                )
                 counts["centroid"] += 1
 
             # .his and .SCAN — skip (binary data)

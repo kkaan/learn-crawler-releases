@@ -14,10 +14,10 @@ from pathlib import Path
 # Import shared utilities from compare_rps_mosaiq (same directory)
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from compare_rps_mosaiq import (
-    find_rps_files,
-    extract_rps_data,
-    unwrap_angle,
     REPO_ROOT,
+    extract_rps_data,
+    find_rps_files,
+    unwrap_angle,
 )
 
 # RedCap template header fields with defaults.

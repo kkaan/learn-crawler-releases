@@ -82,6 +82,28 @@ def test_discover_trajectory_folders_only_includes_fx_with_logs(tmp_path):
     assert set(folders) == {"FX01", "FX13", "FX13-1"}
 
 
+def test_discover_trajectory_folders_normalises_label_case(tmp_path):
+    """Operators name folders Fx01 or FX01; the label is always FXnn."""
+    _make_fx_folder(tmp_path, "Fx01")
+    _make_fx_folder(tmp_path, "FX11")
+    _make_fx_folder(tmp_path, "fx13-1")
+
+    folders = discover_trajectory_folders(tmp_path)
+
+    assert list(folders) == ["FX01", "FX11", "FX13-1"]
+    assert folders["FX01"].name == "Fx01"  # the path still points at the real folder
+
+
+def test_trajectory_assignment_uses_normalised_labels(tmp_path):
+    _fx_with_refs(tmp_path, "Fx01", ["img_1.3.46.1"])
+    kim = _session("img_1.3.46.1", "motionview", datetime(2026, 6, 3, 10, 46))
+
+    result = TrajectoryGroundTruth(tmp_path).assign([kim])
+
+    assert result.fraction_labels == ["FX01"]
+    assert result.assignments["FX01"] == [kim]
+
+
 def test_base_number_strips_restart_suffix():
     assert base_number("FX13") == "13"
     assert base_number("FX13-1") == "13"

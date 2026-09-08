@@ -19,6 +19,8 @@ import re
 from collections import deque
 from pathlib import Path
 
+from learn_upload.utils import parse_frames_xml
+
 _FX_FOLDER_RE = re.compile(r"^FX\d+(-\d+)?$", re.IGNORECASE)
 _MAX_DEPTH = 4
 
@@ -71,6 +73,39 @@ def detect_images_subdir(source_root: Path | str) -> str | None:
                 rel = d.relative_to(source_root)
                 return "." if rel == Path() else rel.as_posix()
     return None
+
+
+def detect_export_patient_ids(
+    source_root: Path | str, images_subdir: str = "IMAGES"
+) -> dict[str, list[str]]:
+    """Map each patient ID found in the export to the sessions that carry it.
+
+    Reads ``<Patient><ID>`` from every ``img_*/_Frames.xml`` under
+    ``source_root / images_subdir`` -- the MRN as the export itself records it,
+    used to verify the MRN the operator typed.
+
+    A dict rather than a single value so the caller can tell apart "nothing
+    found" (empty) from "the export disagrees with itself" (more than one key),
+    which a single return value would silently hide.  Unreadable or malformed
+    ``_Frames.xml`` files are skipped.
+    """
+    source_root = Path(source_root)
+    images_root = source_root if images_subdir in (".", "") else source_root / images_subdir
+
+    found: dict[str, list[str]] = {}
+    if not images_root.is_dir():
+        return found
+
+    for child in sorted(images_root.iterdir()):
+        if not child.is_dir() or not child.name.startswith("img_"):
+            continue
+        xml_path = child / "_Frames.xml"
+        if not xml_path.is_file():
+            continue
+        patient_id = parse_frames_xml(xml_path).get("patient_id")
+        if patient_id:
+            found.setdefault(patient_id, []).append(child.name)
+    return found
 
 
 def detect_trajectory_dir(source_root: Path | str) -> Path | None:

@@ -14,6 +14,7 @@ from learn_upload.anonymise_dicom import (
     anonymise_dicom_file,
     anonymise_ini_file,
     anonymise_output_folder,
+    anonymise_settings_file,
     anonymise_trajectory_log,
     inspect_tps_export,
 )
@@ -633,22 +634,43 @@ class TestAnonymiseIniFile:
 # ---------------------------------------------------------------------------
 
 class TestAnonymiseCentroidFile:
-    def test_replaces_first_two_lines(self, tmp_path):
+    def test_line_one_is_redcap_id_and_line_two_is_anon_id_and_site(self, tmp_path):
         f = tmp_path / "centroid.txt"
-        f.write_text("12345678\nSMITH JOHN\ndata line\n", encoding="utf-8")
+        f.write_text("123146\nSMIRTH,John\ndata line\n", encoding="utf-8")
+
+        result = anonymise_centroid_file(
+            f, "PAT01", site_name="Prostate", redcap_id="LEARN_001"
+        )
+
+        lines = result.read_text(encoding="utf-8").splitlines()
+        assert lines[0] == "LEARN_001"
+        assert lines[1] == "PAT01, Prostate"
+        assert lines[2] == "data line"
+
+    def test_falls_back_to_anon_id_when_redcap_id_missing(self, tmp_path):
+        f = tmp_path / "centroid.txt"
+        f.write_text("12345678\nSMITH JOHN\ncoords\n", encoding="utf-8")
+
+        result = anonymise_centroid_file(f, "PAT01", site_name="Prostate")
+
+        lines = result.read_text(encoding="utf-8").splitlines()
+        assert lines[0] == "PAT01"
+        assert lines[1] == "PAT01, Prostate"
+
+    def test_omits_separator_when_site_name_missing(self, tmp_path):
+        f = tmp_path / "centroid.txt"
+        f.write_text("12345678\nSMITH JOHN\ncoords\n", encoding="utf-8")
 
         result = anonymise_centroid_file(f, "PAT01")
 
         lines = result.read_text(encoding="utf-8").splitlines()
-        assert lines[0] == "PAT01"
         assert lines[1] == "PAT01"
-        assert lines[2] == "data line"
 
     def test_renames_file_with_mrn(self, tmp_path):
         f = tmp_path / "Centroid_12345678.txt"
         f.write_text("12345678\nSMITH JOHN\ncoords\n", encoding="utf-8")
 
-        result = anonymise_centroid_file(f, "PAT01")
+        result = anonymise_centroid_file(f, "PAT01", site_name="Prostate")
 
         assert result.name == "Centroid_PAT01.txt"
         assert result.exists()
@@ -658,41 +680,132 @@ class TestAnonymiseCentroidFile:
         f = tmp_path / "centroid.txt"
         f.write_text("12345678\nSMITH JOHN\ncoords\n", encoding="utf-8")
 
-        result = anonymise_centroid_file(f, "PAT01")
+        result = anonymise_centroid_file(f, "PAT01", site_name="Prostate")
 
         assert result == f
         assert result.exists()
 
 
 # ---------------------------------------------------------------------------
+# Tests: anonymise_settings_file
+# ---------------------------------------------------------------------------
+
+# The KIM settings.txt occasionally found alongside trajectory logs.
+_SETTINGS_TXT = (
+    "patient_markercoordinates2D = 523,536\n"
+    "patient_name = MUNDT,John\n"
+    "patient_mrn = 258413\n"
+    "FOV=60x60\n"
+    "LearningArc=40\n"
+    "LinacType=0\n"
+)
+
+
+class TestAnonymiseSettingsFile:
+    def test_clears_name_and_replaces_mrn(self, tmp_path):
+        f = tmp_path / "settings.txt"
+        f.write_text(_SETTINGS_TXT, encoding="utf-8")
+
+        anonymise_settings_file(f, "PAT05")
+
+        text = f.read_text(encoding="utf-8")
+        assert "patient_name = \n" in text
+        assert "patient_mrn = PAT05\n" in text
+        assert "MUNDT" not in text
+        assert "258413" not in text
+
+    def test_leaves_acquisition_settings_untouched(self, tmp_path):
+        f = tmp_path / "settings.txt"
+        f.write_text(_SETTINGS_TXT, encoding="utf-8")
+
+        anonymise_settings_file(f, "PAT05")
+
+        text = f.read_text(encoding="utf-8")
+        assert "patient_markercoordinates2D = 523,536" in text
+        assert "FOV=60x60" in text
+        assert "LearningArc=40" in text
+        assert "LinacType=0" in text
+
+    def test_tolerates_missing_keys(self, tmp_path):
+        f = tmp_path / "settings.txt"
+        f.write_text("FOV=60x60\n", encoding="utf-8")
+
+        anonymise_settings_file(f, "PAT05")
+
+        assert f.read_text(encoding="utf-8") == "FOV=60x60\n"
+
+
+# ---------------------------------------------------------------------------
 # Tests: anonymise_trajectory_log
 # ---------------------------------------------------------------------------
 
+# A real MarkerLocations_CouchShift row: the Filename column embeds the source
+# path, and the coordinate columns can contain the MRN as a digit substring.
+_COUCHSHIFT_ROW = (
+    "187, 223.898, -2.25841393788174, -11.039918, 509, 529, 0.373, 1, 0, 291, 64, 0, "
+    r"X:\patient_258413\IMAGES\img_1.3.46.423632.33848620268192319353.67"
+    r"\00001.1.3.46.423632.33848620268192319353.67.his"
+)
+
+
 class TestAnonymiseTrajectoryLog:
-    def test_replaces_patient_id(self, tmp_path):
+    def test_replaces_patient_folder_in_embedded_paths(self, tmp_path):
+        f = tmp_path / "MarkerLocations_CouchShift_0.txt"
+        f.write_text(_COUCHSHIFT_ROW + "\n", encoding="utf-8")
+
+        anonymise_trajectory_log(f, "PAT05")
+
+        text = f.read_text(encoding="utf-8")
+        assert r"X:\patient_PAT05\IMAGES" in text
+        assert "patient_258413" not in text
+
+    def test_does_not_corrupt_numbers_containing_the_mrn(self, tmp_path):
+        """The MRN 258413 also occurs inside the coordinate -2.25841393788174."""
+        f = tmp_path / "MarkerLocations_CouchShift_0.txt"
+        f.write_text(_COUCHSHIFT_ROW + "\n", encoding="utf-8")
+
+        anonymise_trajectory_log(f, "PAT05")
+
+        assert "-2.25841393788174" in f.read_text(encoding="utf-8")
+
+    def test_preserves_the_uid_in_the_path(self, tmp_path):
+        f = tmp_path / "MarkerLocations_CouchShift_0.txt"
+        f.write_text(_COUCHSHIFT_ROW + "\n", encoding="utf-8")
+
+        anonymise_trajectory_log(f, "PAT05")
+
+        text = f.read_text(encoding="utf-8")
+        assert "img_1.3.46.423632.33848620268192319353.67" in text
+
+    def test_leaves_config_style_patient_keys_untouched(self, tmp_path):
+        """settings.txt-style keys share the patient_ prefix but are not paths."""
+        f = tmp_path / "MarkerLocations01.txt"
+        original = (
+            "patient_markercoordinates2D = 523,536\n"
+            "patient_name = MUNDT,John\n"
+            "patient_mrn = 258413\n"
+        )
+        f.write_text(original, encoding="utf-8")
+
+        anonymise_trajectory_log(f, "PAT05")
+
+        assert f.read_text(encoding="utf-8") == original
+
+    def test_replaces_every_occurrence_and_both_separators(self, tmp_path):
         f = tmp_path / "MarkerLocations01.txt"
         f.write_text(
             "path=patient_12345678/data\n"
-            "ref=patient_12345678\n"
+            r"ref=X:\patient_12345678\IMAGES\a.his" + "\n"
             "other line\n",
             encoding="utf-8",
         )
 
-        anonymise_trajectory_log(f, "12345678", "PAT01")
+        anonymise_trajectory_log(f, "PAT01")
 
         text = f.read_text(encoding="utf-8")
-        assert "patient_PAT01" in text
         assert "patient_12345678" not in text
+        assert text.count("patient_PAT01") == 2
         assert "other line" in text
-
-    def test_empty_original_id_no_change(self, tmp_path):
-        f = tmp_path / "MarkerLocations01.txt"
-        original = "path=patient_12345678/data\nother\n"
-        f.write_text(original, encoding="utf-8")
-
-        anonymise_trajectory_log(f, "", "PAT01")
-
-        assert f.read_text(encoding="utf-8") == original
 
 
 # ---------------------------------------------------------------------------
@@ -751,6 +864,12 @@ def _build_output_tree(tmp_path):
         "path=patient_12345678/data\n", encoding="utf-8"
     )
 
+    # KIM settings.txt alongside the trajectory logs
+    (kim / "settings.txt").write_text(
+        "patient_name = SMITH,John\npatient_mrn = 12345678\nFOV=60x60\n",
+        encoding="utf-8",
+    )
+
     # Source patient dir (must exist for DicomAnonymiser)
     patient_dir = tmp_path / "patient_12345678"
     patient_dir.mkdir()
@@ -802,6 +921,7 @@ class TestAnonymiseOutputFolder:
         assert "PAT01" in centroid_files[0].name
         centroid_text = centroid_files[0].read_text(encoding="utf-8")
         assert centroid_text.splitlines()[0] == "PAT01"
+        assert centroid_text.splitlines()[1] == "PAT01, Prostate"
 
         # Trajectory log anonymised
         traj_path = (
@@ -811,12 +931,38 @@ class TestAnonymiseOutputFolder:
         assert "patient_PAT01" in traj_text
         assert "patient_12345678" not in traj_text
 
+        # settings.txt anonymised
+        assert counts["settings"] == 1
+        settings_text = (site_root / "KIM-KV" / "img_session" / "settings.txt").read_text(
+            encoding="utf-8"
+        )
+        assert "SMITH" not in settings_text
+        assert "12345678" not in settings_text
+        assert "FOV=60x60" in settings_text
+
         # .his file untouched
         his_path = (
             site_root / "Patient Images" / "PAT01" / "FX1" / "CBCT" / "CBCT1"
             / "CBCT Projections" / "IPS" / "00001.his"
         )
         assert his_path.read_bytes() == b"\x00\x01\x02\x03"
+
+    def test_redcap_id_reaches_centroid_file(self, tmp_path):
+        output_dir, patient_dir, site_name = _build_output_tree(tmp_path)
+
+        anonymise_output_folder(
+            output_dir=output_dir,
+            anon_id="PAT01",
+            site_name=site_name,
+            patient_dir=patient_dir,
+            redcap_id="LEARN_001",
+        )
+
+        centroid_dir = output_dir / site_name / "Patient Files" / "PAT01"
+        centroid = next(centroid_dir.glob("Centroid_*.txt"))
+        lines = centroid.read_text(encoding="utf-8").splitlines()
+        assert lines[0] == "LEARN_001"
+        assert lines[1] == "PAT01, Prostate"
 
     def test_tps_import(self, tmp_path):
         output_dir, patient_dir, site_name = _build_output_tree(tmp_path)

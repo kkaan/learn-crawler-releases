@@ -4,6 +4,7 @@ from pathlib import Path
 
 from learn_upload.source_layout import (
     detect_centroid_file,
+    detect_export_patient_ids,
     detect_images_subdir,
     detect_source_layout,
     detect_tps_export,
@@ -98,3 +99,51 @@ def test_detect_source_layout_combined(tmp_path):
     assert layout["trajectory_dir"] == str(tmp_path)
     assert layout["tps_path"] == str(tmp_path / "TPS")
     assert layout["centroid_path"] == str(tmp_path / "Centroid_9_BeamID_1.txt")
+
+
+# ---------------------------------------------------------------------------
+# detect_export_patient_ids
+# ---------------------------------------------------------------------------
+
+def _img_with_patient(root: Path, subdir: str, name: str, patient_id: str | None) -> Path:
+    d = root / subdir / name
+    d.mkdir(parents=True, exist_ok=True)
+    patient = f"<Patient><ID>{patient_id}</ID></Patient>" if patient_id else ""
+    (d / "_Frames.xml").write_text(f"<FrameData>{patient}</FrameData>", encoding="utf-8")
+    return d
+
+
+def test_detect_export_patient_ids_finds_the_mrn(tmp_path):
+    _img_with_patient(tmp_path, "IMAGES", "img_1.1", "258413")
+    _img_with_patient(tmp_path, "IMAGES", "img_1.2", "258413")
+
+    assert detect_export_patient_ids(tmp_path, "IMAGES") == {
+        "258413": ["img_1.1", "img_1.2"]
+    }
+
+
+def test_detect_export_patient_ids_reports_disagreeing_sessions(tmp_path):
+    _img_with_patient(tmp_path, "IMAGES", "img_1.1", "258413")
+    _img_with_patient(tmp_path, "IMAGES", "img_1.2", "999999")
+
+    found = detect_export_patient_ids(tmp_path, "IMAGES")
+
+    assert found == {"258413": ["img_1.1"], "999999": ["img_1.2"]}
+
+
+def test_detect_export_patient_ids_empty_when_no_patient_element(tmp_path):
+    _img_with_patient(tmp_path, "IMAGES", "img_1.1", None)
+
+    assert detect_export_patient_ids(tmp_path, "IMAGES") == {}
+
+
+def test_detect_export_patient_ids_empty_when_images_subdir_missing(tmp_path):
+    assert detect_export_patient_ids(tmp_path, "IMAGES") == {}
+
+
+def test_detect_export_patient_ids_ignores_malformed_xml(tmp_path):
+    d = tmp_path / "IMAGES" / "img_1.1"
+    d.mkdir(parents=True)
+    (d / "_Frames.xml").write_text("<FrameData><Patient>", encoding="utf-8")
+
+    assert detect_export_patient_ids(tmp_path, "IMAGES") == {}

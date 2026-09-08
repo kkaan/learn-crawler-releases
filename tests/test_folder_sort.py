@@ -783,7 +783,7 @@ class TestCopyTrajectoryLogs:
         return patient_dir, traj_base
 
     def test_copy_trajectory_logs(self, tmp_path):
-        """Files placed in correct Trajectory Logs structure."""
+        """Files placed in correct Patient Measured Motion structure."""
         patient_dir, traj_base = self._setup_trajectory(tmp_path)
         out = tmp_path / "out"
 
@@ -794,8 +794,9 @@ class TestCopyTrajectoryLogs:
         # 5 files per FX (2 MarkerLocations + 3 plain) × 2 FXs = 10
         assert counts["files_copied"] == 10
 
+        pmm = out / "Prostate" / "Patient Measured Motion" / "PRIME001"
         for fx in ("FX01", "FX02"):
-            traj_dest = out / "Prostate" / "Trajectory Logs" / "PRIME001" / fx / "Trajectory Logs"
+            traj_dest = pmm / fx / "TM_Logs"
             assert traj_dest.is_dir()
             assert (traj_dest / "MarkerLocations.txt").exists()
             assert (traj_dest / "MarkerLocationsGA.txt").exists()
@@ -804,8 +805,24 @@ class TestCopyTrajectoryLogs:
             assert (traj_dest / "Rotation.txt").exists()
 
             # Treatment Records sibling created
-            treat_dest = out / "Prostate" / "Trajectory Logs" / "PRIME001" / fx / "Treatment Records"
+            treat_dest = pmm / fx / "Treatment Records"
             assert treat_dest.is_dir()
+
+        # The old top-level folder is gone -- this is a move, not a copy
+        assert not (out / "Prostate" / "Trajectory Logs").exists()
+
+    def test_copy_trajectory_logs_normalises_folder_case(self, tmp_path):
+        """A source folder named Fx03 lands in the output as FX03."""
+        patient_dir, traj_base = self._setup_trajectory(tmp_path)
+        (traj_base / "FX01").rename(traj_base / "Fx03")
+        out = tmp_path / "out"
+
+        mapper = LearnFolderMapper(patient_dir, "PRIME001", "Prostate", out)
+        mapper.copy_trajectory_logs(traj_base)
+
+        pmm = out / "Prostate" / "Patient Measured Motion" / "PRIME001"
+        assert (pmm / "FX03" / "TM_Logs" / "MarkerLocations.txt").exists()
+        assert sorted(d.name for d in pmm.iterdir()) == ["FX02", "FX03"]
 
     def test_trajectory_marker_locations_raw_copy(self, tmp_path):
         """MarkerLocations copied raw — PII still present (anonymise step handles it)."""
@@ -816,8 +833,8 @@ class TestCopyTrajectoryLogs:
         mapper.copy_trajectory_logs(traj_base)
 
         ml_path = (
-            out / "Prostate" / "Trajectory Logs" / "PRIME001"
-            / "FX01" / "Trajectory Logs" / "MarkerLocations.txt"
+            out / "Prostate" / "Patient Measured Motion" / "PRIME001"
+            / "FX01" / "TM_Logs" / "MarkerLocations.txt"
         )
         text = ml_path.read_text(encoding="utf-8")
         # Raw copy — original MRN still present
@@ -834,8 +851,8 @@ class TestCopyTrajectoryLogs:
         for fname in ("couchShifts.txt", "covOutput.txt", "Rotation.txt"):
             src = traj_base / "FX01" / fname
             dest = (
-                out / "Prostate" / "Trajectory Logs" / "PRIME001"
-                / "FX01" / "Trajectory Logs" / fname
+                out / "Prostate" / "Patient Measured Motion" / "PRIME001"
+                / "FX01" / "TM_Logs" / fname
             )
             assert src.read_text() == dest.read_text()
 

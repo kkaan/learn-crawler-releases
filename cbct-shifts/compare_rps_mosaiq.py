@@ -15,16 +15,12 @@ from contextlib import redirect_stdout
 from datetime import datetime, timedelta
 from pathlib import Path
 
-import numpy as np
-import pydicom
-
 # ---------------------------------------------------------------------------
 # Import ElektaRPSExtractor from the repo root
 # ---------------------------------------------------------------------------
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
-from extract_elekta_rps_matrices import ElektaRPSExtractor
-
+from extract_elekta_rps_matrices import ElektaRPSExtractor  # noqa: E402
 
 # ===================================================================
 # SECTION A -- Parse Mosaiq log
@@ -55,9 +51,9 @@ def parse_mosaiq_log(filepath):
     """Read the Mosaiq CBCT shifts TSV and return a list of record dicts."""
     records = []
 
-    with open(filepath, 'r', encoding='utf-8-sig') as f:
+    with open(filepath, encoding='utf-8-sig') as f:
         reader = csv.reader(f, delimiter='\t', quotechar='"')
-        header = next(reader)  # skip header row
+        next(reader)  # skip header row
 
         # Collect all rows first (multi-line quoted Comments span rows)
         rows = list(reader)
@@ -120,7 +116,9 @@ def find_rps_files(base_path):
         parts = p.parts
         fx_label = cbct_label = None
         for i, part in enumerate(parts):
-            if part.startswith('FX'):
+            # Fraction folders are named by the operator and copied verbatim,
+            # so Fx01 and FX11 can sit side by side in one patient.
+            if part.upper().startswith('FX'):
                 fx_label = part
             if part.startswith('CBCT') and part != 'CBCT':
                 cbct_label = part

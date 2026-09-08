@@ -146,10 +146,18 @@ def parse_frames_xml(xml_path: Path) -> dict:
         "dicom_uid": None,
         "kv": None,
         "ma": None,
+        "patient_id": None,
     }
     try:
         tree = ET.parse(xml_path)
         root = tree.getroot()
+
+        # Patient ID (the MRN as the export itself records it)
+        patient_el = root.find("Patient")
+        if patient_el is not None:
+            pid_el = patient_el.find("ID")
+            if pid_el is not None and pid_el.text:
+                result["patient_id"] = pid_el.text.strip()
 
         # Treatment ID
         treatment_el = root.find("Treatment")

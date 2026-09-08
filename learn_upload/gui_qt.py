@@ -27,7 +27,7 @@ from PyQt6.QtCore import (
     QThread,
     pyqtSignal,
 )
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtWidgets import (
     QApplication,
     QButtonGroup,
@@ -37,6 +37,7 @@ from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMainWindow,
@@ -54,16 +55,25 @@ from PyQt6.QtWidgets import (
 )
 
 from learn_upload.anonymise_dicom import anonymise_output_folder, inspect_tps_export
-from learn_upload.config import DEFAULT_LEARN_OUTPUT, setup_logging
+from learn_upload.config import (
+    DEFAULT_LEARN_OUTPUT,
+    check_patient_mrn,
+    setup_logging,
+    validate_config,
+)
 from learn_upload.folder_sort import LearnFolderMapper
 from learn_upload.fraction_assignment import (
     apply_manual_assignments,
     build_date_to_fraction,
     build_fraction_result,
     distinct_session_dates,
+    fraction_sort_key,
     has_trajectory_folders,
+    normalize_fraction_label,
+    session_fraction_map,
+    summarize_fractions,
 )
-from learn_upload.source_layout import detect_source_layout
+from learn_upload.source_layout import detect_export_patient_ids, detect_source_layout
 from learn_upload.verify_pii import verify_no_pii
 
 logger = logging.getLogger(__name__)
@@ -307,7 +317,10 @@ class DiscoveryWorker(QThread):
     def _fraction_preview(source_root: Path, sessions: list, prime: bool) -> dict:
         """Serializable summary of the trajectory-based fraction assignment."""
         if not prime:
-            return {"labels": [], "counts": {}, "unmatched": [], "ambiguous": [], "notes": []}
+            return {
+                "labels": [], "counts": {}, "unmatched": [], "ambiguous": [],
+                "notes": [], "assignments": {}, "fractions": [],
+            }
         result = build_fraction_result(sessions, source_root=source_root, mode="trajectory")
 
         def info(s) -> dict:
@@ -323,6 +336,8 @@ class DiscoveryWorker(QThread):
             "unmatched": [info(s) for s in result.unmatched],
             "ambiguous": [{**info(s), "candidates": c} for s, c in result.ambiguous],
             "notes": list(result.notes),
+            "assignments": session_fraction_map(result),
+            "fractions": summarize_fractions(result),
         }
 
 
@@ -343,6 +358,7 @@ class AnonymiseWorker(QThread):
             anon_id = cfg["anon_id"].strip()
             patient_dir = Path(cfg["source_path"])
             tps_path = cfg.get("tps_path", "").strip()
+            redcap_id = cfg.get("redcap_id", "").strip()
 
             result = anonymise_output_folder(
                 output_dir=output_dir,
@@ -350,6 +366,7 @@ class AnonymiseWorker(QThread):
                 site_name=site_name,
                 patient_dir=patient_dir,
                 tps_path=Path(tps_path) if tps_path else None,
+                redcap_id=redcap_id,
                 progress_callback=lambda cur, tot, name: self.progress.emit(cur, tot, name),
             )
             self.finished.emit(result)
@@ -422,15 +439,11 @@ class PiiCheckWorker(QThread):
         try:
             pii_strings = [s.strip() for s in cfg.get("pii_strings", []) if s.strip()]
 
-            # Auto-detect original MRN from source directory name
-            source_path = cfg.get("source_path", "")
-            if source_path:
-                dir_name = Path(source_path).name
-                if dir_name.lower().startswith("patient_"):
-                    mrn = dir_name[len("patient_"):]
-                    if mrn and mrn not in pii_strings:
-                        pii_strings.append(mrn)
-                        logger.info("Auto-detected MRN from source path")
+            # The MRN verified at step 1 is always scanned for, even if the
+            # operator edited it out of the PII strings afterwards.
+            mrn = cfg.get("patient_mrn", "").strip()
+            if mrn and mrn not in pii_strings:
+                pii_strings.append(mrn)
 
             if not pii_strings:
                 self.finished.emit({
@@ -642,6 +655,14 @@ class ConfigPage(QWidget):
         self.anon_id.setPlaceholderText("PAT01")
         id_form.addRow("Anonymised ID:", self.anon_id)
 
+        self.patient_mrn = QLineEdit()
+        self.patient_mrn.setPlaceholderText("e.g. 258413")
+        self.patient_mrn.setToolTip(
+            "The patient's MRN, checked against the ID recorded in the export's "
+            "_Frames.xml when you continue."
+        )
+        id_form.addRow("Patient MRN:", self.patient_mrn)
+
         self.redcap_id = QLineEdit()
         self.redcap_id.setPlaceholderText("e.g. LEARN_001")
         id_form.addRow("REDCap ID:", self.redcap_id)
@@ -778,6 +799,7 @@ class ConfigPage(QWidget):
         pii = [s.strip() for s in self.pii_strings.text().split(",") if s.strip()]
         return {
             "anon_id": self.anon_id.text().strip(),
+            "patient_mrn": self.patient_mrn.text().strip(),
             "redcap_id": self.redcap_id.text().strip(),
             "site_name": self.site_name.text().strip(),
             "source_path": self.source_path.text().strip(),
@@ -793,22 +815,12 @@ class ConfigPage(QWidget):
         }
 
     def validate(self) -> str | None:
-        cfg = self.get_config()
-        if not cfg["anon_id"]:
-            return "Anonymised ID is required."
-        if not cfg["anon_id"].startswith("PAT") or not cfg["anon_id"][3:].isdigit():
-            return "Anon ID must match PATxx format (e.g. PAT01)."
-        if not cfg["site_name"]:
-            return "Site Name is required."
-        if not cfg["source_path"]:
-            return "Source Path is required."
-        if not cfg["output_path"]:
-            return "Output Path is required."
-        return None
+        return validate_config(self.get_config())
 
     def set_config(self, cfg: dict) -> None:
         """Pre-populate form fields from a config dict."""
         self.anon_id.setText(cfg.get("anon_id", ""))
+        self.patient_mrn.setText(cfg.get("patient_mrn", ""))
         self.redcap_id.setText(cfg.get("redcap_id", ""))
         self.site_name.setText(cfg.get("site_name", ""))
         self.source_path.setText(cfg.get("source_path", ""))
@@ -878,6 +890,23 @@ class PreviewPage(QWidget):
         self.fraction_warning.setStyleSheet("color: #f59e0b; font-size: 12px;")
         fl.addWidget(self.fraction_warning)
 
+        # One row per fraction so dates and counts can be verified before the
+        # sort commits anything.  Missing-reference detail lives in the
+        # assignment record; here it is a count.
+        self.fraction_summary = QTableWidget()
+        self.fraction_summary.setColumnCount(5)
+        self.fraction_summary.setHorizontalHeaderLabels(
+            ["Fraction", "Date", "CBCT", "KIM-KV", "Missing refs"]
+        )
+        self.fraction_summary.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch
+        )
+        self.fraction_summary.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.fraction_summary.verticalHeader().setVisible(False)
+        self.fraction_summary.setMaximumHeight(220)
+        self.fraction_summary.hide()
+        fl.addWidget(self.fraction_summary)
+
         self.fraction_hint = QLabel(
             "Enter the fraction number for each date. Look these up in the Mosaiq "
             "patient schedule / image browser."
@@ -902,43 +931,39 @@ class PreviewPage(QWidget):
         self.fraction_attention.hide()
         fl.addWidget(self.fraction_attention)
 
-        # Manual reassignment of unmatched/ambiguous sessions (PRIME mode).
-        self.reassign_label = QLabel("Reassign unplaced sessions (optional):")
-        self.reassign_label.setStyleSheet("color: #94a3b8; font-size: 12px;")
-        self.reassign_label.hide()
-        fl.addWidget(self.reassign_label)
-
-        self.reassign_table = QTableWidget()
-        self.reassign_table.setColumnCount(4)
-        self.reassign_table.setHorizontalHeaderLabels(
-            ["Session", "Type", "Date", "Assign to (e.g. FX10)"]
+        self.override_hint = QLabel(
+            "Double-click a Fraction cell to override where a session goes. "
+            "Overrides are marked with *."
         )
-        self.reassign_table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.Stretch
-        )
-        self.reassign_table.verticalHeader().setVisible(False)
-        self.reassign_table.setMaximumHeight(160)
-        self.reassign_table.hide()
-        fl.addWidget(self.reassign_table)
+        self.override_hint.setStyleSheet("color: #94a3b8; font-size: 12px;")
+        self.override_hint.hide()
+        fl.addWidget(self.override_hint)
 
         self.fraction_frame.hide()
         layout.addWidget(self.fraction_frame)
 
         self.radio_trajectory.toggled.connect(self._on_fraction_mode_changed)
-        self.fraction_table.itemChanged.connect(lambda _: self._refresh_attention())
+        self.fraction_table.itemChanged.connect(lambda _: self._on_date_table_edited())
 
         self._fraction_preview: dict = {}
         self._session_dates: list[str] = []
+        self._sessions: list[dict] = []
+        self._overrides: dict[str, str] = {}  # img_dir name -> FXnn
 
         # Table
         self.table = QTableWidget()
-        self.table.setColumnCount(7)
+        self.table.setColumnCount(8)
         self.table.setHorizontalHeaderLabels([
-            "Type", "Directory", "Datetime",
+            "Fraction", "Type", "Directory", "Datetime",
             "Treatment", "kV", "mA", "RPS",
         ])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        # Only the Fraction column is editable; the rest are flagged read-only.
+        self.table.setEditTriggers(
+            QTableWidget.EditTrigger.DoubleClicked
+            | QTableWidget.EditTrigger.EditKeyPressed
+        )
+        self.table.itemChanged.connect(self._on_session_fraction_edited)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setAlternatingRowColors(False)
         self.table.verticalHeader().setVisible(False)
@@ -969,23 +994,113 @@ class PreviewPage(QWidget):
         self._populate_tps_preview(data.get("tps_report", {}))
         self._populate_fraction_ui(data)
 
-        # Fill table
-        sessions = data.get("sessions", [])
+        self._sessions = data.get("sessions", [])
+        self._overrides = {}
+        self._fill_session_table()
+
+    # -- Session table --
+
+    @staticmethod
+    def _session_name(s: dict) -> str:
+        img_dir = s.get("img_dir", "")
+        return Path(img_dir).name if img_dir else ""
+
+    def _auto_label(self, s: dict) -> tuple[str, str]:
+        """``(label, display)`` for a session under the current mode, ignoring overrides."""
+        name = self._session_name(s)
+        if self.radio_trajectory.isChecked():
+            label = self._fraction_preview.get("assignments", {}).get(name)
+            if label:
+                return label, label
+            for amb in self._fraction_preview.get("ambiguous", []):
+                if amb.get("name") == name:
+                    return "", "? (" + " | ".join(amb.get("candidates", [])) + ")"
+            return "", "—"
+        mapping, _errors = build_date_to_fraction(self._date_rows())
+        dt = s.get("scan_datetime")
+        if dt:
+            label = mapping.get(date.fromisoformat(str(dt)[:10]))
+            if label:
+                return label, label
+        return "", "—"
+
+    def _fill_session_table(self):
+        def sort_key(s: dict):
+            label, _ = self._auto_label(s)
+            return (
+                fraction_sort_key(label) if label else (10**9 + 1, 0, ""),
+                str(s.get("scan_datetime") or ""),
+            )
+
+        sessions = sorted(self._sessions, key=sort_key)
+        self.table.blockSignals(True)
         self.table.setRowCount(len(sessions))
         for row, s in enumerate(sessions):
-            self.table.setItem(row, 0, QTableWidgetItem(s.get("session_type", "")))
-            img_dir = s.get("img_dir", "")
-            dir_name = Path(img_dir).name if img_dir else ""
-            self.table.setItem(row, 1, QTableWidgetItem(dir_name))
             dt = s.get("scan_datetime")
-            dt_str = str(dt).replace("T", " ")[:19] if dt else "-"
-            self.table.setItem(row, 2, QTableWidgetItem(dt_str))
-            self.table.setItem(row, 3, QTableWidgetItem(s.get("treatment_id") or "-"))
             kv = s.get("tube_kv")
-            self.table.setItem(row, 4, QTableWidgetItem(str(kv) if kv is not None else "-"))
             ma = s.get("tube_ma")
-            self.table.setItem(row, 5, QTableWidgetItem(str(ma) if ma is not None else "-"))
-            self.table.setItem(row, 6, QTableWidgetItem("Yes" if s.get("has_rps") else "-"))
+            cells = [
+                "",  # Fraction: filled by _refresh_fraction_column
+                s.get("session_type", ""),
+                self._session_name(s),
+                str(dt).replace("T", " ")[:19] if dt else "-",
+                s.get("treatment_id") or "-",
+                str(kv) if kv is not None else "-",
+                str(ma) if ma is not None else "-",
+                "Yes" if s.get("has_rps") else "-",
+            ]
+            for col, text in enumerate(cells):
+                item = QTableWidgetItem(text)
+                if col != 0:
+                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                self.table.setItem(row, col, item)
+        self.table.blockSignals(False)
+        self._refresh_fraction_column()
+
+    def _refresh_fraction_column(self):
+        """Recompute every Fraction cell from mode, preview and overrides."""
+        trajectory = self.radio_trajectory.isChecked()
+        by_name = {self._session_name(s): s for s in self._sessions}
+        self.table.blockSignals(True)
+        for row in range(self.table.rowCount()):
+            name_item = self.table.item(row, 2)
+            item = self.table.item(row, 0)
+            if name_item is None or item is None:
+                continue
+            s = by_name.get(name_item.text(), {})
+            label, display = self._auto_label(s)
+            override = self._overrides.get(name_item.text()) if trajectory else None
+            if override:
+                item.setText(f"{override} *")
+                item.setForeground(QColor("#fbbf24"))
+            else:
+                item.setText(display)
+                item.setForeground(QColor("#fbbf24" if not label else "#e2e8f0"))
+            flags = item.flags()
+            item.setFlags(
+                flags | Qt.ItemFlag.ItemIsEditable
+                if trajectory
+                else flags & ~Qt.ItemFlag.ItemIsEditable
+            )
+        self.table.blockSignals(False)
+
+    def _on_session_fraction_edited(self, item: QTableWidgetItem):
+        if item.column() != 0 or not self.radio_trajectory.isChecked():
+            return
+        name_item = self.table.item(item.row(), 2)
+        if name_item is None:
+            return
+        name = name_item.text()
+        raw = item.text().replace("*", "").strip()
+        s = next((x for x in self._sessions if self._session_name(x) == name), {})
+        auto_label, _ = self._auto_label(s)
+        label = "" if raw in ("", "—", "-") or raw.startswith("?") else normalize_fraction_label(raw)
+        if not label or label == auto_label:
+            self._overrides.pop(name, None)
+        else:
+            self._overrides[name] = label
+        self._refresh_fraction_column()
+        self._refresh_attention()
 
     # -- Fraction assignment UI --
 
@@ -996,7 +1111,7 @@ class PreviewPage(QWidget):
 
         self.fraction_frame.show()
         self._populate_fraction_dates(self._session_dates)
-        self._populate_reassign_table(self._fraction_preview)
+        self._populate_fraction_summary(self._fraction_preview)
 
         self.radio_trajectory.blockSignals(True)
         self.radio_manual.blockSignals(True)
@@ -1006,23 +1121,24 @@ class PreviewPage(QWidget):
         self.radio_manual.blockSignals(False)
         self._on_fraction_mode_changed()
 
-    def _populate_reassign_table(self, preview: dict):
-        """Fill the reassignment table from unmatched + ambiguous sessions."""
-        unmatched = preview.get("unmatched", [])
-        ambiguous = preview.get("ambiguous", [])
-        rows = [(s, "") for s in unmatched] + [
-            # pre-fill the first candidate as a suggestion for ambiguous rows
-            (s, (s.get("candidates") or [""])[0]) for s in ambiguous
-        ]
-        self.reassign_table.blockSignals(True)
-        self.reassign_table.setRowCount(len(rows))
-        for r, (s, suggestion) in enumerate(rows):
-            for col, key in enumerate(("name", "type", "date")):
-                item = QTableWidgetItem(s.get(key, ""))
-                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                self.reassign_table.setItem(r, col, item)
-            self.reassign_table.setItem(r, 3, QTableWidgetItem(suggestion))
-        self.reassign_table.blockSignals(False)
+    def _populate_fraction_summary(self, preview: dict):
+        """One row per fraction: date, session counts, missing references."""
+        rows = preview.get("fractions", [])
+        amber = QColor("#f59e0b")
+        self.fraction_summary.setRowCount(len(rows))
+        for r, f in enumerate(rows):
+            cells = [
+                f["label"],
+                f["date"] or "—",
+                str(f["cbct"]),
+                str(f["kim_kv"]),
+                str(f["missing"]),
+            ]
+            for col, text in enumerate(cells):
+                item = QTableWidgetItem(text)
+                if (col == 1 and not f["date"]) or (col == 4 and f["missing"]):
+                    item.setForeground(amber)
+                self.fraction_summary.setItem(r, col, item)
 
     def _populate_fraction_dates(self, dates: list[str]):
         self.fraction_table.blockSignals(True)
@@ -1039,25 +1155,16 @@ class PreviewPage(QWidget):
         self.fraction_warning.setVisible(trajectory)
         self.fraction_hint.setVisible(not trajectory)
         self.fraction_table.setVisible(not trajectory)
-        # The reassignment table only applies to trajectory (PRIME) mode and
-        # only when there is something to reassign.
-        show_reassign = trajectory and self.reassign_table.rowCount() > 0
-        self.reassign_label.setVisible(show_reassign)
-        self.reassign_table.setVisible(show_reassign)
+        self.fraction_summary.setVisible(
+            trajectory and self.fraction_summary.rowCount() > 0
+        )
+        self.override_hint.setVisible(trajectory)
+        self._refresh_fraction_column()
         self._refresh_attention()
 
-    def _reassign_rows(self) -> dict:
-        """Read the reassignment table into ``{session_name: raw_fraction_text}``."""
-        overrides: dict = {}
-        for r in range(self.reassign_table.rowCount()):
-            name_item = self.reassign_table.item(r, 0)
-            label_item = self.reassign_table.item(r, 3)
-            if name_item is None or label_item is None:
-                continue
-            label = label_item.text().strip()
-            if label:
-                overrides[name_item.text().strip()] = label
-        return overrides
+    def _on_date_table_edited(self):
+        self._refresh_fraction_column()
+        self._refresh_attention()
 
     def _date_rows(self) -> dict:
         """Read the date table into ``{date: raw_fraction_text}``."""
@@ -1087,8 +1194,15 @@ class PreviewPage(QWidget):
             if ambiguous:
                 names = ", ".join(s["name"] for s in ambiguous)
                 bits.append(f"{len(ambiguous)} ambiguous: {names}")
-            bits.extend(prev.get("notes", []))
-            summary = "Fractions: " + (", ".join(labels) if labels else "none detected")
+            missing = sum(f.get("missing", 0) for f in prev.get("fractions", []))
+            if missing:
+                bits.append(
+                    f"{missing} trajectory reference(s) not in the export — see "
+                    f"Missing refs above; detail is written to the assignment record"
+                )
+            if self._overrides:
+                bits.append(f"{len(self._overrides)} manual override(s)")
+            summary = f"{len(labels)} fraction(s) detected" if labels else "no fractions detected"
             text = summary + ("   •   " + "   •   ".join(bits) if bits else "")
         else:
             rows = self._date_rows()
@@ -1112,7 +1226,7 @@ class PreviewPage(QWidget):
             return {
                 "fraction_mode": "trajectory",
                 "date_to_fraction": {},
-                "manual_assignments": self._reassign_rows(),
+                "manual_assignments": dict(self._overrides),
             }
         mapping, _errors = build_date_to_fraction(self._date_rows())
         return {
@@ -1282,6 +1396,8 @@ class ProgressPage(QWidget):
 class PiiResultPage(QWidget):
     """Step 5: PII Verification results."""
 
+    rerun_requested = pyqtSignal()
+
     def __init__(self, parent=None):
         super().__init__(parent)
         layout = QVBoxLayout(self)
@@ -1315,11 +1431,29 @@ class PiiResultPage(QWidget):
         self.status.setStyleSheet("color: #94a3b8; font-size: 14px; padding: 40px;")
         layout.addWidget(self.status)
 
+        # Re-run, for after the operator has scrubbed findings by hand
+        rerun_row = QHBoxLayout()
+        self.rerun_hint = QLabel(
+            "Fixed something by hand in the output folder?  Re-run the scan "
+            "before generating the report."
+        )
+        self.rerun_hint.setStyleSheet("color: #94a3b8; font-size: 12px;")
+        rerun_row.addWidget(self.rerun_hint)
+        rerun_row.addStretch()
+        self.rerun_btn = QPushButton("Re-run PII check")
+        self.rerun_btn.clicked.connect(self.rerun_requested.emit)
+        rerun_row.addWidget(self.rerun_btn)
+        layout.addLayout(rerun_row)
+        self.rerun_hint.hide()
+        self.rerun_btn.hide()
+
         layout.addStretch()
 
     def set_loading(self, loading: bool):
         self.status.setVisible(loading)
         self.banner.setVisible(not loading)
+        self.rerun_hint.setVisible(not loading)
+        self.rerun_btn.setVisible(not loading)
         if loading:
             self.status.setText("Scanning for PII...")
             self.table.hide()
@@ -1568,6 +1702,7 @@ class LearnPipelineWindow(QMainWindow):
         self._anon_page = ProgressPage("Anonymise")
         self._sort_page = ProgressPage("Folder Sort")
         self._pii_page = PiiResultPage()
+        self._pii_page.rerun_requested.connect(self._rerun_pii_check)
         self._report_page = ReportPage()
 
         self._stack.addWidget(self._config_page)
@@ -1701,11 +1836,89 @@ class LearnPipelineWindow(QMainWindow):
             QMessageBox.warning(self, "Validation Error", error)
             return
 
+        cfg = self._config_page.get_config()
+        resolved_mrn = self._resolve_patient_mrn(cfg)
+        if resolved_mrn is None:
+            return  # operator cancelled — stay on the config page
+        if resolved_mrn != cfg["patient_mrn"]:
+            self._config_page.patient_mrn.setText(resolved_mrn)
+
         self._config = self._config_page.get_config()
+        # The verified MRN seeds the PII scan so step 4 always looks for the
+        # real identifier, rather than relying on it being typed in twice.
+        if resolved_mrn not in self._config["pii_strings"]:
+            self._config["pii_strings"].append(resolved_mrn)
+            self._config_page.pii_strings.setText(
+                ", ".join(self._config["pii_strings"])
+            )
         self._save_config(self._config)
         self._completed_steps.add(0)
         self._go_to_step(1)
         self._run_discovery()
+
+    def _resolve_patient_mrn(self, cfg: dict) -> str | None:
+        """Verify the entered MRN against the export; return the MRN to use.
+
+        Returns *None* if the operator cancelled, in which case the wizard
+        stays on the config page.
+        """
+        export_ids = detect_export_patient_ids(
+            Path(cfg["source_path"]), cfg["images_subdir"]
+        )
+        check = check_patient_mrn(cfg["patient_mrn"], export_ids)
+        if check.status == "match":
+            return check.entered
+
+        if check.status == "not_found":
+            detail = (
+                "No patient ID could be read from the export's _Frames.xml "
+                "files, so the MRN could not be verified."
+            )
+        elif check.status == "conflicting_export":
+            listed = ", ".join(check.export_ids)
+            detail = (
+                f"The export disagrees with itself — its sessions carry more "
+                f"than one patient ID ({listed}).  This usually means two "
+                f"patients' data has been mixed into one folder."
+            )
+        else:
+            detail = (
+                f"The export records patient ID <b>{check.export_id}</b>, "
+                f"but you entered <b>{check.entered}</b>."
+            )
+
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("Patient MRN check")
+        box.setText("The MRN you entered does not match the export.")
+        box.setInformativeText(f"{detail}<br><br>Which value should be used?")
+        use_export = (
+            box.addButton(f"Use export ({check.export_id})", QMessageBox.ButtonRole.AcceptRole)
+            if check.export_id
+            else None
+        )
+        keep_mine = box.addButton(
+            f"Keep mine ({check.entered})", QMessageBox.ButtonRole.RejectRole
+        )
+        enter_other = box.addButton("Enter another...", QMessageBox.ButtonRole.ActionRole)
+        cancel = box.addButton(QMessageBox.StandardButton.Cancel)
+        box.exec()
+
+        clicked = box.clickedButton()
+        if clicked is cancel:
+            return None
+        if clicked is use_export:
+            return check.export_id
+        if clicked is keep_mine:
+            return check.entered
+
+        if clicked is enter_other:
+            text, ok = QInputDialog.getText(
+                self, "Patient MRN", "Enter the MRN to use:", text=check.entered
+            )
+            text = text.strip()
+            return text if ok and text else None
+        return None
 
     # -- Step 2: Discovery --
 
@@ -1839,6 +2052,15 @@ class LearnPipelineWindow(QMainWindow):
     def _start_pii_check(self):
         self._completed_steps.add(3)
         self._go_to_step(4)
+        self._launch_pii_worker()
+
+    def _rerun_pii_check(self):
+        """Re-scan the output after manual scrubbing, without leaving the step."""
+        if self._active_worker is not None:
+            return
+        self._launch_pii_worker()
+
+    def _launch_pii_worker(self):
         self._pii_page.set_loading(True)
         self._btn_continue.setEnabled(False)
 

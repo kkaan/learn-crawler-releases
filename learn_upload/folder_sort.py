@@ -17,7 +17,11 @@ from pathlib import Path
 
 import pydicom
 
-from learn_upload.fraction_assignment import FractionResult
+from learn_upload.fraction_assignment import (
+    FractionResult,
+    format_assignment_record,
+    normalize_fraction_label,
+)
 from learn_upload.utils import (
     extract_ini_from_rps,
     parse_couch_shifts,
@@ -359,8 +363,9 @@ class LearnFolderMapper:
         fraction_map : dict
             Fraction label → list of sessions (for Patient Images).
         trajectory_fx_labels : list[str], optional
-            Fraction labels (e.g. ``["FX01", "FX02"]``) for Trajectory Logs
-            directories.  If *None*, trajectory dirs are not created.
+            Fraction labels (e.g. ``["FX01", "FX02"]``) discovered in the
+            trajectory source directory; used to create the Patient Measured
+            Motion tree.  If *None*, those dirs are not created.
 
         Returns the site root path.
         """
@@ -400,11 +405,13 @@ class LearnFolderMapper:
             # KIM-KV directory (always created per fraction)
             (fx_path / "KIM-KV").mkdir(parents=True, exist_ok=True)
 
-        # Trajectory Logs — per fraction label
+        # Patient Measured Motion — per fraction label
         if trajectory_fx_labels:
             for fx_label in trajectory_fx_labels:
-                traj_fx = site_root / "Trajectory Logs" / self.anon_id / fx_label
-                (traj_fx / "Trajectory Logs").mkdir(parents=True, exist_ok=True)
+                traj_fx = (
+                    site_root / "Patient Measured Motion" / self.anon_id / fx_label
+                )
+                (traj_fx / "TM_Logs").mkdir(parents=True, exist_ok=True)
                 (traj_fx / "Treatment Records").mkdir(parents=True, exist_ok=True)
 
         return site_root
@@ -538,7 +545,7 @@ class LearnFolderMapper:
     # ----- Trajectory logs -----
 
     def copy_trajectory_logs(self, trajectory_base_dir: Path) -> dict:
-        """Copy KIM trajectory log files to the LEARN Trajectory Logs structure (raw).
+        """Copy KIM trajectory logs to Patient Measured Motion/<id>/FXnn/TM_Logs (raw).
 
         Auto-discovers FX## directories under *trajectory_base_dir* and copies
         all files as-is.  Anonymisation is handled separately by the anonymise
@@ -558,15 +565,15 @@ class LearnFolderMapper:
         counts = {"fx_count": 0, "files_copied": 0}
 
         for fx_dir in fx_dirs:
-            fx_label = fx_dir.name  # e.g. "FX01"
+            fx_label = normalize_fraction_label(fx_dir.name)  # Fx01 -> FX01
             dest_traj = (
-                site_root / "Trajectory Logs" / self.anon_id
-                / fx_label / "Trajectory Logs"
+                site_root / "Patient Measured Motion" / self.anon_id
+                / fx_label / "TM_Logs"
             )
             dest_traj.mkdir(parents=True, exist_ok=True)
             # Also create Treatment Records sibling
             dest_treat = (
-                site_root / "Trajectory Logs" / self.anon_id
+                site_root / "Patient Measured Motion" / self.anon_id
                 / fx_label / "Treatment Records"
             )
             dest_treat.mkdir(parents=True, exist_ok=True)
@@ -674,7 +681,7 @@ class LearnFolderMapper:
             trajectory_base_dir = Path(trajectory_base_dir)
             if trajectory_base_dir.is_dir():
                 trajectory_fx_labels = sorted(
-                    d.name for d in trajectory_base_dir.iterdir()
+                    normalize_fraction_label(d.name) for d in trajectory_base_dir.iterdir()
                     if d.is_dir() and re.match(r"FX\d+", d.name, re.IGNORECASE)
                 )
 
@@ -689,6 +696,7 @@ class LearnFolderMapper:
                 "motionview": 0, "frames_xml": 0,
             },
             "dry_run": dry_run,
+            "assignment_record": None,
         }
 
         if dry_run:
@@ -751,5 +759,40 @@ class LearnFolderMapper:
             cal_counts = self.copy_calibrations(Path(calibrations_dir), fraction_map)
             summary["files_copied"]["calibrations"] = cal_counts["files_copied"]
 
+        # 10. Record how the fractions were assigned, in the source folder
+        record_of = fraction_result or FractionResult(
+            assignments=dict(fraction_map),
+            fraction_labels=list(fraction_map),
+        )
+        summary["assignment_record"] = self.write_assignment_record(record_of)
+
         logger.info("Execute complete: %s", summary)
         return summary
+
+    def write_assignment_record(self, fraction_result: FractionResult) -> str | None:
+        """Write the fraction-assignment audit record into the patient source folder.
+
+        Records the sessions a trajectory log referenced but the export lacks,
+        anything that could not be placed, and the final fraction assignment.
+        Overwrites on re-run so one record per patient stays current.
+
+        Returns the path written, or *None* if it could not be written -- a
+        read-only source (a network share, say) must not fail a transfer that
+        has otherwise completed.
+        """
+        path = self.patient_dir / f"fraction_assignment_record_{self.anon_id}.md"
+        text = format_assignment_record(
+            fraction_result,
+            anon_id=self.anon_id,
+            source_name=self.patient_dir.name,
+        )
+        try:
+            path.write_text(text, encoding="utf-8")
+        except OSError:
+            logger.warning(
+                "Could not write assignment record to %s — transfer itself is "
+                "unaffected", path, exc_info=True,
+            )
+            return None
+        logger.info("Wrote assignment record -> %s", path)
+        return str(path)

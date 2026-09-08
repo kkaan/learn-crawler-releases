@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -39,6 +39,15 @@ KIM_KV = "motionview"
 _NON_FX_SORT_LAST = 10**9
 
 
+@dataclass(frozen=True)
+class MissingReference:
+    """An img_<UID> session a trajectory log points at that the export lacks."""
+
+    uid: str
+    fraction_label: str
+    log_name: str  # "FX01/MarkerLocations_CouchShift_0.txt"
+
+
 @dataclass
 class FractionResult:
     """The outcome of assigning sessions to fractions."""
@@ -48,6 +57,7 @@ class FractionResult:
     unmatched: list[CBCTSession] = field(default_factory=list)
     ambiguous: list[tuple[CBCTSession, list[str]]] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    missing_references: list[MissingReference] = field(default_factory=list)
 
 
 def parse_trajectory_referenced_uids(log_path: Path) -> set[str]:
@@ -61,7 +71,12 @@ def parse_trajectory_referenced_uids(log_path: Path) -> set[str]:
 
 
 def discover_trajectory_folders(source_root: Path) -> dict[str, Path]:
-    """Map ``FXnn`` folder name -> path for folders that contain KIM logs."""
+    """Map ``FXnn`` label -> path for folders that contain KIM logs.
+
+    Operators name these folders by hand (``Fx01`` and ``FX11`` side by side
+    in one patient), so the label is normalised to ``FXnn`` while the path
+    keeps pointing at the folder as named on disk.
+    """
     source_root = Path(source_root)
     folders: dict[str, Path] = {}
     if not source_root.is_dir():
@@ -70,7 +85,7 @@ def discover_trajectory_folders(source_root: Path) -> dict[str, Path]:
         if not child.is_dir() or not _FX_FOLDER_RE.match(child.name):
             continue
         if any(child.glob(_TRAJECTORY_GLOB)):
-            folders[child.name] = child
+            folders[normalize_fraction_label(child.name)] = child
     return folders
 
 
@@ -118,14 +133,17 @@ class TrajectoryGroundTruth:
             groups.setdefault(base_number(label), []).append(label)
         base_label_for = {num: select_base_label(lbls) for num, lbls in groups.items()}
 
-        # img_<UID> -> fraction label, from the trajectory logs
+        # img_<UID> -> fraction label, from the trajectory logs.  The log a UID
+        # came from is kept so a missing session can name its source file.
         uid_to_fraction: dict[str, str] = {}
+        uid_to_log: dict[str, str] = {}
         referenced_uids: set[str] = set()
         for label, folder in folders.items():
             for log in sorted(folder.glob(_TRAJECTORY_GLOB)):
                 for uid in parse_trajectory_referenced_uids(log):
                     referenced_uids.add(uid)
                     uid_to_fraction[uid] = label
+                    uid_to_log[uid] = f"{folder.name}/{log.name}"
 
         session_names = {s.img_dir.name for s in sessions}
 
@@ -146,9 +164,16 @@ class TrajectoryGroundTruth:
                 base = base_label_for[base_number(label)]
                 date_candidates.setdefault(s.scan_datetime.date(), set()).add(base)
 
-        # referenced-but-missing sessions -> note
+        # referenced-but-missing sessions -> structured record + GUI note
         for uid in sorted(referenced_uids):
             if uid not in session_names:
+                result.missing_references.append(
+                    MissingReference(
+                        uid=uid,
+                        fraction_label=uid_to_fraction[uid],
+                        log_name=uid_to_log[uid],
+                    )
+                )
                 result.notes.append(
                     f"Trajectory log references {uid} but it is not in the export"
                 )
@@ -305,3 +330,117 @@ def apply_manual_assignments(
             result.fraction_labels.sort(key=fraction_sort_key)
         result.assignments[label].append(session)
     return result
+
+
+def format_assignment_record(
+    result: FractionResult,
+    anon_id: str,
+    source_name: str,
+    generated: datetime | None = None,
+) -> str:
+    """Render *result* as a markdown audit record.
+
+    Documents what the trajectory logs referenced but the export did not
+    contain, which sessions could not be placed, and the final fraction
+    assignment.  Pure formatting -- writing is the caller's job.
+    """
+    stamp = (generated or datetime.now()).strftime("%Y-%m-%d %H:%M")
+    lines = [
+        f"# Fraction assignment record - {anon_id}",
+        "",
+        f"Source: `{source_name}`  |  Generated: {stamp}",
+        "",
+        "## Missing image data",
+        "",
+        "Sessions referenced by a trajectory log that are absent from the XVI export.",
+        "",
+    ]
+
+    if result.missing_references:
+        lines += [
+            "| Session | Fraction | Referenced by |",
+            "|---|---|---|",
+        ]
+        lines += [
+            f"| `{m.uid}` | {m.fraction_label} | `{m.log_name}` |"
+            for m in result.missing_references
+        ]
+        lines += ["", f"**{len(result.missing_references)} missing.**"]
+    else:
+        lines.append("None - every referenced session is present in the export.")
+
+    lines += ["", "## Sessions needing attention", ""]
+    if result.unmatched or result.ambiguous:
+        lines += ["| Session | Type | Scan date | Issue |", "|---|---|---|---|"]
+        for s in result.unmatched:
+            lines.append(f"| `{s.img_dir.name}` | {s.session_type} | {_when(s)} | unmatched |")
+        for s, candidates in result.ambiguous:
+            cands = ", ".join(candidates)
+            lines.append(
+                f"| `{s.img_dir.name}` | {s.session_type} | {_when(s)} | "
+                f"ambiguous: {cands} |"
+            )
+    else:
+        lines.append("None.")
+
+    lines += ["", "## Final assignment", ""]
+    if any(result.assignments.values()):
+        lines += ["| Fraction | Session | Type | Scan date |", "|---|---|---|---|"]
+        for label in sorted(result.assignments, key=fraction_sort_key):
+            for s in result.assignments[label]:
+                lines.append(
+                    f"| {label} | `{s.img_dir.name}` | {s.session_type} | {_when(s)} |"
+                )
+    else:
+        lines.append("No sessions assigned.")
+
+    labels = ", ".join(result.fraction_labels) if result.fraction_labels else "none"
+    lines += ["", f"Fractions detected: {labels}", ""]
+    return "\n".join(lines)
+
+
+def _when(session: CBCTSession) -> str:
+    """Scan date for the record, or a dash for undated MotionView sessions."""
+    if session.scan_datetime is None:
+        return "-"
+    return session.scan_datetime.strftime("%Y-%m-%d %H:%M")
+
+
+def session_fraction_map(result: FractionResult) -> dict[str, str]:
+    """``{img_dir_name: fraction_label}`` for every assigned session.
+
+    Unmatched and ambiguous sessions are absent; the caller decides how to show
+    those (``result.unmatched`` / ``result.ambiguous`` carry the detail).
+    """
+    return {
+        s.img_dir.name: label
+        for label, sessions in result.assignments.items()
+        for s in sessions
+    }
+
+
+def summarize_fractions(result: FractionResult) -> list[dict]:
+    """One row per fraction, in natural order, for the Data Preview summary.
+
+    Each row: ``{"label", "date", "cbct", "kim_kv", "missing"}`` -- the date is
+    the earliest dated session's scan date (``""`` when nothing dated landed
+    there), ``cbct`` counts CBCT-like sessions (setup CBCT and KIM-Learning),
+    ``kim_kv`` counts MotionView sessions, and ``missing`` counts trajectory
+    references the export could not satisfy.
+    """
+    missing_by_label: dict[str, int] = {}
+    for ref in result.missing_references:
+        missing_by_label[ref.fraction_label] = missing_by_label.get(ref.fraction_label, 0) + 1
+
+    rows = []
+    for label in sorted(result.fraction_labels, key=fraction_sort_key):
+        sessions = result.assignments.get(label, [])
+        dates = [s.scan_datetime.date() for s in sessions if s.scan_datetime is not None]
+        rows.append({
+            "label": label,
+            "date": min(dates).isoformat() if dates else "",
+            "cbct": sum(1 for s in sessions if s.session_type in CBCT_LIKE),
+            "kim_kv": sum(1 for s in sessions if s.session_type == KIM_KV),
+            "missing": missing_by_label.get(label, 0),
+        })
+    return rows
