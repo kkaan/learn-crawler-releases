@@ -42,11 +42,11 @@ uv run python -m pytest tests/ -v  # run tests
 
 The wizard walks through 6 steps:
 
-1. **Configuration** — paths, anonymised ID (PATxx), site name, PII search strings.
-2. **Data Preview** — discover XVI sessions and preview fraction assignments.
+1. **Configuration** — paths, anonymised ID (PATxx), REDCap ID, patient MRN (verified against the export), site name, PII search strings.
+2. **Data Preview** — discover XVI sessions, verify the fraction/date assignment, and override any session before anything is copied.
 3. **Folder Sort** — copy files into the LEARN directory structure.
-4. **Anonymise** — run DICOM anonymisation with per-file progress.
-5. **PII Verification** — scan output for residual patient data.
+4. **Anonymise** — anonymise DICOM, XML, INI, centroid, trajectory-log and settings files in place, with per-file progress.
+5. **PII Verification** — scan output for residual patient data; re-run after manual scrubbing.
 6. **CBCT Shift Report** — generate a markdown report of CBCT registration shifts.
 
 See the **[GUI Walkthrough](https://kkaan.github.io/learn-crawler-releases/#doc=GUI_Walkthrough.md)**
