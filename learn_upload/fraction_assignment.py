@@ -81,12 +81,14 @@ def discover_trajectory_folders(source_root: Path) -> dict[str, Path]:
     folders: dict[str, Path] = {}
     if not source_root.is_dir():
         return folders
-    for child in sorted(source_root.iterdir()):
+    for child in source_root.iterdir():
         if not child.is_dir() or not _FX_FOLDER_RE.match(child.name):
             continue
         if any(child.glob(_TRAJECTORY_GLOB)):
             folders[normalize_fraction_label(child.name)] = child
-    return folders
+    # Natural fraction order, independent of the filesystem: iterdir() is
+    # case-insensitive on NTFS but ASCII on Linux, where FX11 < Fx01.
+    return dict(sorted(folders.items(), key=lambda kv: fraction_sort_key(kv[0])))
 
 
 def base_number(label: str) -> str:

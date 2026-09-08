@@ -362,3 +362,22 @@ def test_apply_manual_assignments_ignores_unknown_and_blank(tmp_path):
 
     assert result.unmatched == [s1]   # blank label and unknown name both ignored
     assert result.assignments["FX01"] == []
+
+
+def test_discover_trajectory_folders_order_does_not_depend_on_filesystem(tmp_path):
+    """Linux iterdir() is ASCII-ordered (FX11 < Fx01); NTFS is case-insensitive.
+
+    Force the Linux order on any platform and require natural FX order back.
+    """
+    from unittest.mock import patch
+
+    folders_on_disk = [
+        _make_fx_folder(tmp_path, "FX11"),
+        _make_fx_folder(tmp_path, "Fx01"),
+        _make_fx_folder(tmp_path, "fx13-1"),
+    ]
+
+    with patch.object(Path, "iterdir", return_value=iter(folders_on_disk)):
+        folders = discover_trajectory_folders(tmp_path)
+
+    assert list(folders) == ["FX01", "FX11", "FX13-1"]

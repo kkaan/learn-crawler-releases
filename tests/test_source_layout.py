@@ -50,6 +50,17 @@ def test_detect_images_subdir_none_when_absent(tmp_path):
     assert detect_images_subdir(tmp_path) is None
 
 
+def test_detect_images_subdir_skips_trajectory_folders(tmp_path):
+    # A trajectory folder (FX07) that also holds a copied img_* session must
+    # not be mistaken for the images subdirectory: on a sorted BFS it is
+    # visited before "XVI Export" and would win.
+    _fx(tmp_path, "FX07")
+    _img(tmp_path, "FX07", "img_9.9")
+    _img(tmp_path, "XVI Export", "img_1.1")
+    _img(tmp_path, "XVI Export", "img_1.2")
+    assert detect_images_subdir(tmp_path) == "XVI Export"
+
+
 def test_detect_trajectory_dir(tmp_path):
     _fx(tmp_path, "FX01")
     _fx(tmp_path, "FX13-1")

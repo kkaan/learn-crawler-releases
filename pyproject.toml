@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "learn-upload"
-version = "1.2.0"
+version = "1.2.1"
 description = "Automation tools for the LEARN data transfer pipeline"
 requires-python = ">=3.10"
 dependencies = [
@@ -23,6 +23,7 @@ gui = ["PyQt6", "numpy"]
 dev = [
     "pytest>=7.0",
     "ruff>=0.4",
+    "numpy",  # cbct-shifts/ (covered by tests/) imports it via scripts/extract_elekta_rps_matrices.py
 ]
 build = ["pyinstaller"]
 

@@ -38,7 +38,7 @@ name = "exceptiongroup"
 version = "1.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
+    { name = "typing-extensions" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/50/79/66800aadf48771f6b62f7eb014e352e5d06856655206165d775e675a02c9/exceptiongroup-1.3.1.tar.gz", hash = "sha256:8b412432c6055b0b7d14c310000ae93352ed6754f70fa8f7c34141f91c4e3219", size = 30371, upload-time = "2025-11-21T23:01:54.787Z" }
 wheels = [
@@ -56,7 +56,7 @@ wheels = [
 
 [[package]]
 name = "learn-upload"
-version = "1.2.0"
+version = "1.2.1"
 source = { editable = "." }
 dependencies = [
     { name = "defusedxml" },
@@ -68,6 +68,8 @@ build = [
     { name = "pyinstaller" },
 ]
 dev = [
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "pytest" },
     { name = "ruff" },
 ]
@@ -80,6 +82,7 @@ gui = [
 [package.metadata]
 requires-dist = [
     { name = "defusedxml", specifier = ">=0.7" },
+    { name = "numpy", marker = "extra == 'dev'" },
     { name = "numpy", marker = "extra == 'gui'" },
     { name = "pydicom", specifier = ">=3.0.1" },
     { name = "pyinstaller", marker = "extra == 'build'" },

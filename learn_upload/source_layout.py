@@ -25,8 +25,12 @@ _FX_FOLDER_RE = re.compile(r"^FX\d+(-\d+)?$", re.IGNORECASE)
 _MAX_DEPTH = 4
 
 
-def _iter_dirs(root: Path, max_depth: int = _MAX_DEPTH):
-    """Yield *root* and its subdirectories breadth-first up to *max_depth*."""
+def _iter_dirs(root: Path, max_depth: int = _MAX_DEPTH, *, skip_fx: bool = False):
+    """Yield *root* and its subdirectories breadth-first up to *max_depth*.
+
+    With ``skip_fx`` the ``FXnn/`` trajectory folders are neither yielded nor
+    descended into (*root* itself is always yielded).
+    """
     queue: deque[tuple[Path, int]] = deque([(root, 0)])
     while queue:
         d, depth = queue.popleft()
@@ -38,6 +42,8 @@ def _iter_dirs(root: Path, max_depth: int = _MAX_DEPTH):
         except OSError:
             continue
         for child in children:
+            if skip_fx and _FX_FOLDER_RE.match(child.name):
+                continue
             queue.append((child, depth + 1))
 
 
@@ -55,11 +61,16 @@ def detect_images_subdir(source_root: Path | str) -> str | None:
     The images subdirectory is the shallowest folder that directly contains an
     ``img_*`` directory with a ``_Frames.xml``.  Returns ``"."`` when the
     ``img_*`` dirs sit directly in *source_root*.
+
+    ``FXnn/`` trajectory folders are skipped: operators sometimes copy a
+    session's ``img_*`` folder next to its KIM logs, and on a sorted walk
+    ``FX07`` is visited before ``XVI Export`` -- picking it would confine
+    session discovery to that one fraction.
     """
     source_root = Path(source_root)
     if not source_root.is_dir():
         return None
-    for d in _iter_dirs(source_root):
+    for d in _iter_dirs(source_root, skip_fx=True):
         try:
             children = sorted(d.iterdir())
         except OSError:
