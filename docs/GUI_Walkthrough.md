@@ -81,6 +81,8 @@ The Configuration page collects all the parameters needed for the pipeline run. 
 | Field | Description |
 |-------|-------------|
 | **Anonymised ID** | The PATxx identifier for this patient (e.g. `PAT01`). Must match the format `PATxx` where `xx` is a two-digit number. |
+| **Patient MRN** | The patient's medical record number. Required. On **Continue** it is checked against the `<Patient><ID>` recorded in the export's `_Frames.xml` files; on a mismatch you choose which value to use (see below). The confirmed MRN is added to the PII search strings automatically. |
+| **REDCap ID** | The study identifier the patient is registered under in REDCap. Required -- it is written to line 1 of the centroid file during anonymisation. No format is enforced. |
 | **Site Name** | The treatment site label used as a subfolder in the output (e.g. `prostate`). |
 
 ### Data Paths
@@ -94,6 +96,21 @@ The Configuration page collects all the parameters needed for the pipeline run. 
 | **Images Subdirectory** | Name of the images folder within the patient export. Defaults to `XVI Export`. |
 | **Centroid File** | Path to a centroid CSV file for KIM data (optional). |
 | **Trajectory Logs Dir** | Directory containing trajectory log files (optional). |
+
+### Patient MRN Verification
+
+When you continue from step 1, the MRN you entered is compared with the patient ID the
+export itself records. If they differ -- or no ID can be read, or the export's own
+sessions disagree with each other -- a dialog offers:
+
+- **Use export** -- take the ID recorded in `_Frames.xml` (offered only when the export
+  gives exactly one ID).
+- **Keep mine** -- proceed with what you typed.
+- **Enter another...** -- type a different value.
+- **Cancel** -- stay on the config page and fix the Source Path.
+
+Whichever value you settle on is written back into the field and appended to the PII
+search strings, so step 4 always scans for the real MRN.
 
 ### PII Search Strings
 
@@ -113,10 +130,29 @@ Once all required fields are filled in, click **Continue to Preview** to proceed
 
 ## Step 2: Data Preview
 
-After submitting the configuration, the GUI discovers all imaging sessions within the source directory. A table displays the results with the following columns:
+After submitting the configuration, the GUI discovers all imaging sessions within the source directory and works out which treatment fraction each one belongs to. Nothing is copied yet -- this step exists so you can verify the fraction assignment before the folder sort commits it.
+
+### Fraction summary
+
+In trajectory (PRIME) mode a summary table shows one row per fraction:
 
 | Column | Description |
 |--------|-------------|
+| **Fraction** | The `FXnn` label. Folder names are normalised, so a source folder named `Fx01` appears (and is written to the output) as `FX01`. |
+| **Date** | The earliest scan date among the sessions assigned to that fraction. Shown in amber as `--` when no dated session landed there. |
+| **CBCT** | Number of setup CBCT and KIM-Learning sessions assigned. |
+| **KIM-KV** | Number of MotionView sessions assigned. |
+| **Missing refs** | Sessions the fraction's trajectory logs reference that are not in the export (amber when non-zero). Each one is listed in the assignment record written to the source folder during the sort. |
+
+A fraction with no date and non-zero missing references means the trajectory logs point at sessions the XVI export does not contain -- check the export before continuing.
+
+### Sessions
+
+The session table lists every discovered session, sorted by fraction and then time:
+
+| Column | Description |
+|--------|-------------|
+| **Fraction** | The fraction the session will be sorted into. `--` means it could not be placed; `? (FX03 \| FX04)` means the date matched more than one fraction. **Double-click to override**: type an `FXnn` label (or a bare number) to send the session elsewhere. Overrides are marked with `*` and counted in the attention line. Clear the cell to remove an override. |
 | **Type** | Session type (e.g. `cbct`, `planar`). |
 | **Directory** | The `img_` directory name containing this session. |
 | **Datetime** | Scan date and time extracted from the ScanUID. |
@@ -131,7 +167,9 @@ plan, structure, and dose DICOM files found in the expected TPS export folders.
 Missing TPS categories are shown in orange as warnings, but the workflow can
 continue; missing categories simply will not be imported during anonymisation.
 
-Review the table to confirm the expected sessions are present, then click **Start Folder Sort** to proceed.
+In manual (non-PRIME) mode the Fraction column is read-only and follows the date -> fraction table as you fill it in.
+
+Review both tables -- the right sessions present, each fraction on the expected date, nothing unplaced that shouldn't be -- then click **Start Folder Sort** to proceed.
 
 > *Screenshot to be added.*
 
@@ -164,7 +202,7 @@ Click **Start Anonymisation** to proceed.
 
 ## Step 4: Anonymise
 
-The anonymisation step processes all DICOM, XML, and INI files in the output directory, replacing patient-identifiable information with the anonymised ID.
+The anonymisation step processes every file in the output directory that can carry patient-identifiable information, replacing it with the anonymised ID: DICOM, `_Frames.xml`, INI, the centroid file, the KIM trajectory logs (`MarkerLocations*.txt`, where the MRN appears inside embedded source paths), and the KIM `settings.txt` occasionally exported alongside them (patient name cleared, MRN replaced).
 
 A progress bar tracks the current file being processed (e.g. `CT_1859_301.dcm`) and the overall percentage. The log output shows each file as it is anonymised, including the source and destination paths.
 
@@ -188,7 +226,7 @@ Click **Run PII Verification** to proceed.
 
 ## Step 5: PII Verification
 
-The PII verification step scans all files in the output directory for any residual patient-identifiable information matching the search strings configured in Step 1. The MRN extracted from the source directory name is automatically included.
+The PII verification step scans all files in the output directory for any residual patient-identifiable information matching the search strings configured in Step 1. The Patient MRN verified in Step 1 is always included, even if it was removed from the search strings.
 
 ![PII Verification scanning in progress](images/gui-walkthrough/07.png)
 
@@ -205,6 +243,12 @@ If findings are detected, a table lists each one with:
 | **Matched** | The PII string that was matched. |
 
 If the result is FAIL, you should investigate and resolve the findings before uploading to LEARN. Common causes include PII embedded in private DICOM tags or XML metadata that was not covered by the anonymisation rules.
+
+Matching is a plain substring search, so a numeric MRN can occasionally match inside a measurement -- for example the MRN `258413` inside the marker coordinate `-2.25841393788174` in a trajectory log. Check the **Matched** context before treating a finding as a leak.
+
+### Re-running after manual scrubbing
+
+If you fix a finding by hand in the output folder, click **Re-run PII check** at the bottom of the results to scan again without leaving the step. **Generate CBCT Report** stays disabled until the re-scan completes, so the report is always generated from a freshly verified output.
 
 ![Bottom of PII Verification page showing "Generate CBCT Report" button](images/gui-walkthrough/09.png)
 

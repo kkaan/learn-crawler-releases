@@ -71,11 +71,11 @@
       <section class="block">
         <h2>Wizard steps</h2>
         <div class="card-grid">
-          <div class="card"><div class="card-label">STEP 1</div><div class="card-title">Configuration</div><div class="card-desc">Paths, anonymised ID (PATxx), site name, PII search strings, dry-run option.</div></div>
-          <div class="card"><div class="card-label">STEP 2</div><div class="card-title">Data preview</div><div class="card-desc">Discovers XVI sessions, shows scan datetime, treatment ID, kV/mA, RPS presence, and fraction assignment.</div></div>
+          <div class="card"><div class="card-label">STEP 1</div><div class="card-title">Configuration</div><div class="card-desc">Paths, anonymised ID (PATxx), REDCap ID, patient MRN (verified against the export), site name, PII search strings, dry-run option.</div></div>
+          <div class="card"><div class="card-label">STEP 2</div><div class="card-title">Data preview</div><div class="card-desc">Discovers XVI sessions, shows scan datetime, treatment ID, kV/mA, RPS presence, and a per-fraction summary you can verify and override before anything is copied.</div></div>
           <div class="card"><div class="card-label">STEP 3</div><div class="card-title">Folder sort</div><div class="card-desc">Copies files into the LEARN directory structure by fraction and file type.</div></div>
-          <div class="card"><div class="card-label">STEP 4</div><div class="card-title">Anonymise</div><div class="card-desc">DICOM, XML, and INI anonymisation with per-file progress. Replaces the MIM workflow.</div></div>
-          <div class="card"><div class="card-label">STEP 5</div><div class="card-title">PII verification</div><div class="card-desc">Scans output for residual patient data. PASS or FAIL, with a findings table (file, location, matched string).</div></div>
+          <div class="card"><div class="card-label">STEP 4</div><div class="card-title">Anonymise</div><div class="card-desc">DICOM, XML, INI, centroid, trajectory-log and settings.txt anonymisation with per-file progress. Replaces the MIM workflow.</div></div>
+          <div class="card"><div class="card-label">STEP 5</div><div class="card-title">PII verification</div><div class="card-desc">Scans output for residual patient data. PASS or FAIL, with a findings table (file, location, matched string). Re-run after manual scrubbing.</div></div>
           <div class="card"><div class="card-label">STEP 6</div><div class="card-title">CBCT shift report</div><div class="card-desc">Writes cbct_shift_report.md to Patient Files/PATxx/ with per-fraction shifts in patient coordinates.</div></div>
         </div>
         <p class="hint">Step-by-step screenshots: <a href="#doc=GUI_Walkthrough.md">GUI walkthrough</a>.</p>

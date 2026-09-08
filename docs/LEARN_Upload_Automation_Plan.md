@@ -126,9 +126,12 @@ Map the flat XVI export structure into the hierarchical LEARN target structure a
             CT/             (anonymised CT_SET DICOM)
             Plan/           (anonymised DICOM_PLAN)
     Ground Truth/PATxx/
-    Patient Measured Motions/
+    Patient Measured Motion/
+        PATxx/
+            FX0/ ... FXn/
+                TM_Logs/            (KIM trajectory logs)
+                Treatment Records/
     RPM/
-    Trajectory Logs/
 ```
 
 ### Fraction Assignment Logic
