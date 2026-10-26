@@ -89,7 +89,7 @@ The Configuration page collects all the parameters needed for the pipeline run. 
 
 | Field | Description |
 |-------|-------------|
-| **Source Path** | Root of the XVI patient export (e.g. `Patient_258215`). Contains the `IMAGES/` or `XVI Export/` subdirectory. |
+| **Source Path** | Root of the XVI patient export (e.g. `Patient_123456`). Contains the `IMAGES/` or `XVI Export/` subdirectory. |
 | **TPS Export Path** | Path to exported treatment planning system DICOM files (optional). |
 | **Output Path** | Root output directory where the LEARN folder structure will be created. |
 | **Staging Path** | Intermediate staging directory. Defaults to `output/_staging` if left blank. |
